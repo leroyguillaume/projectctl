@@ -1,4 +1,5 @@
 mod cli;
+mod git;
 
 use clap::Parser;
 use cli::Arguments;

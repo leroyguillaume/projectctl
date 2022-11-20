@@ -12,5 +12,9 @@ repository = "https://github.com/leroyguillaume/projectctl"
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
 clap-verbosity-flag = "2.0"
+git2 = "0.15"
 log = "0.4"
 simple_logger = { version = "4.0", features = ["stderr"] }
+
+[dev-dependencies]
+tempfile = "3.3"
