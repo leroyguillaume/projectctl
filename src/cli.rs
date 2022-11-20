@@ -1,6 +1,8 @@
 use clap::{Args, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 
+use crate::{cmd::Command, err::Error};
+
 const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
 #[derive(Debug, Parser)]
@@ -11,6 +13,12 @@ pub struct Arguments {
 
     #[command(flatten)]
     pub verbosity: Verbosity,
+}
+
+impl Arguments {
+    pub fn try_into_command(self) -> Result<Box<dyn Command>, Error> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Subcommand)]
