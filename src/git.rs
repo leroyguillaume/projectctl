@@ -2,12 +2,15 @@ use std::path::Path;
 
 use git2::{Error, Repository};
 use log::debug;
+#[cfg(test)]
+use stub_trait::stub;
 
 pub enum Reference {
     _Branch(String),
     _Tag(String),
 }
 
+#[cfg_attr(test, stub)]
 pub trait Git {
     fn checkout_repository(
         &self,
