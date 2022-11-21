@@ -14,11 +14,11 @@ impl NewCommand {
 }
 
 impl Command for NewCommand {
-    fn kind(&self) -> CommandKind {
+    fn kind(self) -> CommandKind {
         CommandKind::New(self)
     }
 
-    fn run(&self) -> Result {
+    fn run(self) -> Result {
         todo!();
     }
 }
