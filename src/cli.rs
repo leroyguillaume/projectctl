@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 
@@ -31,6 +33,9 @@ pub enum CommandArgument {
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
 pub struct NewCommandArguments {
+    #[clap(help = "Destination directory", long, name = "DIR")]
+    pub dest: Option<PathBuf>,
+
     #[clap(default_value = DEFAULT_TPL_GIT_REPO_URL, help = "URL to git repository that contains templates", long, name = "URL")]
     pub git: String,
 
@@ -57,6 +62,7 @@ pub struct NewCommandArguments {
 impl NewCommandArguments {
     pub fn default_for_test() -> Self {
         Self {
+            dest: None,
             git: DEFAULT_TPL_GIT_REPO_URL.into(),
             git_branch: None,
             git_tag: None,
