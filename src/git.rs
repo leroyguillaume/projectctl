@@ -66,14 +66,10 @@ mod test {
                 tag: &'static str,
             }
 
-            struct Parameters {
-                reference: Option<Reference>,
-            }
-
             #[test]
             fn repo_when_ref_is_unset() {
                 test(
-                    |_| Parameters { reference: None },
+                    |_| None,
                     |ctx, commit_id| {
                         assert_eq!(commit_id, ctx.commit_v3_id);
                     },
@@ -83,9 +79,7 @@ mod test {
             #[test]
             fn repo_when_ref_is_branch() {
                 test(
-                    |ctx| Parameters {
-                        reference: Some(Reference::Branch(ctx.branch.into())),
-                    },
+                    |ctx| Some(Reference::Branch(ctx.branch.into())),
                     |ctx, commit_id| {
                         assert_eq!(commit_id, ctx.commit_v1_1_id);
                     },
@@ -95,9 +89,7 @@ mod test {
             #[test]
             fn repo_when_ref_is_tag() {
                 test(
-                    |ctx| Parameters {
-                        reference: Some(Reference::Tag(ctx.tag.into())),
-                    },
+                    |ctx| Some(Reference::Tag(ctx.tag.into())),
                     |ctx, commit_id| {
                         assert_eq!(commit_id, ctx.commit_v2_id);
                     },
@@ -130,7 +122,10 @@ mod test {
             }
 
             #[inline]
-            fn test<G: Fn(&Context) -> Parameters, A: Fn(&Context, Oid)>(given: G, assert: A) {
+            fn test<G: Fn(&Context) -> Option<Reference>, A: Fn(&Context, Oid)>(
+                given: G,
+                assert: A,
+            ) {
                 let remote_dirpath = tempdir().unwrap().into_path();
                 let filepath = remote_dirpath.join("file");
                 let branch = "develop";
@@ -157,9 +152,7 @@ mod test {
                 };
                 let params = given(&ctx);
                 let url = remote_dirpath.to_str().unwrap();
-                let repo = DefaultGit
-                    .checkout_repository(url, params.reference, &dest)
-                    .unwrap();
+                let repo = DefaultGit.checkout_repository(url, params, &dest).unwrap();
                 assert(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
             }
         }
