@@ -1,9 +1,15 @@
+pub mod new;
+
 use crate::err::Error;
+
+use new::NewCommand;
 
 pub type Result = std::result::Result<(), Error>;
 
 #[derive(Debug)]
-pub enum CommandKind {}
+pub enum CommandKind<'a> {
+    New(&'a NewCommand),
+}
 
 pub trait Command {
     fn kind(&self) -> CommandKind;

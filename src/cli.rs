@@ -27,7 +27,7 @@ pub enum CommandArgument {
     New(NewCommandArguments),
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug, Eq, PartialEq)]
 pub struct NewCommandArguments {
     #[clap(default_value = DEFAULT_TPL_GIT_REPO_URL, help = "URL to git repository that contains templates", long, name = "URL")]
     pub git: String,
@@ -49,4 +49,16 @@ pub struct NewCommandArguments {
 
     #[clap(help = "Name of the project to create")]
     pub name: String,
+}
+
+#[cfg(test)]
+impl NewCommandArguments {
+    pub fn default_for_test() -> Self {
+        Self {
+            git: DEFAULT_TPL_GIT_REPO_URL.into(),
+            git_branch: None,
+            git_tag: None,
+            name: String::from("test"),
+        }
+    }
 }
