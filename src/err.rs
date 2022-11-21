@@ -6,17 +6,17 @@ use std::{
 
 #[derive(Debug)]
 pub enum Error {
-    _DestinationDirectoryAlreadyExists(PathBuf),
-    _Git(git2::Error),
-    _IO(io::Error),
+    DestinationDirectoryAlreadyExists(PathBuf),
+    Git(git2::Error),
+    IO(io::Error),
 }
 
 impl Error {
     pub fn to_return_code(&self) -> i32 {
         match self {
-            Self::_DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
-            Self::_Git(_) => exitcode::SOFTWARE,
-            Self::_IO(_) => exitcode::IOERR,
+            Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
+            Self::Git(_) => exitcode::SOFTWARE,
+            Self::IO(_) => exitcode::IOERR,
         }
     }
 }
@@ -24,11 +24,11 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            Self::_DestinationDirectoryAlreadyExists(path) => {
+            Self::DestinationDirectoryAlreadyExists(path) => {
                 write!(f, "{} already exists", path.display())
             }
-            Self::_Git(err) => write!(f, "{}", err),
-            Self::_IO(err) => write!(f, "{}", err),
+            Self::Git(err) => write!(f, "{}", err),
+            Self::IO(err) => write!(f, "{}", err),
         }
     }
 }
@@ -56,12 +56,12 @@ mod test {
 
             test!(
                 destination_directory_already_exists,
-                Error::_DestinationDirectoryAlreadyExists(PathBuf::from("/")),
+                Error::DestinationDirectoryAlreadyExists(PathBuf::from("/")),
                 exitcode::IOERR
             );
             test!(
                 git,
-                Error::_Git(git2::Error::new(
+                Error::Git(git2::Error::new(
                     git2::ErrorCode::Ambiguous,
                     git2::ErrorClass::Callback,
                     "",
@@ -70,7 +70,7 @@ mod test {
             );
             test!(
                 io,
-                Error::_IO(io::Error::from(io::ErrorKind::PermissionDenied)),
+                Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)),
                 exitcode::IOERR
             );
         }
@@ -83,7 +83,7 @@ mod test {
         fn destination_directory_already_exists() {
             let path = Path::new("/");
             let str = format!("{} already exists", path.display());
-            let err = Error::_DestinationDirectoryAlreadyExists(path.into());
+            let err = Error::DestinationDirectoryAlreadyExists(path.into());
             assert_eq!(err.to_string(), str);
         }
 
@@ -92,7 +92,7 @@ mod test {
             let cause =
                 git2::Error::new(git2::ErrorCode::Ambiguous, git2::ErrorClass::Callback, "");
             let str = cause.to_string();
-            let err = Error::_Git(cause);
+            let err = Error::Git(cause);
             assert_eq!(err.to_string(), str);
         }
 
@@ -100,7 +100,7 @@ mod test {
         fn io() {
             let cause = io::Error::from(io::ErrorKind::PermissionDenied);
             let str = cause.to_string();
-            let err = Error::_IO(cause);
+            let err = Error::IO(cause);
             assert_eq!(err.to_string(), str);
         }
     }

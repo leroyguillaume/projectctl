@@ -6,8 +6,8 @@ use log::debug;
 use stub_trait::stub;
 
 pub enum Reference {
-    _Branch(String),
-    _Tag(String),
+    Branch(String),
+    Tag(String),
 }
 
 #[cfg_attr(test, stub)]
@@ -33,8 +33,8 @@ impl Git for DefaultGit {
         let repo = Repository::clone(url, dest)?;
         if let Some(reference) = reference {
             let reference = match reference {
-                Reference::_Branch(branch) => format!("refs/remotes/origin/{}", branch),
-                Reference::_Tag(tag) => format!("refs/tags/{}", tag),
+                Reference::Branch(branch) => format!("refs/remotes/origin/{}", branch),
+                Reference::Tag(tag) => format!("refs/tags/{}", tag),
             };
             debug!("Settings HEAD to {}", reference);
             repo.set_head(&reference)?;
@@ -84,7 +84,7 @@ mod test {
             fn repo_when_ref_is_branch() {
                 test(
                     |ctx| Parameters {
-                        reference: Some(Reference::_Branch(ctx.branch.into())),
+                        reference: Some(Reference::Branch(ctx.branch.into())),
                     },
                     |ctx, commit_id| {
                         assert_eq!(commit_id, ctx.commit_v1_1_id);
@@ -96,7 +96,7 @@ mod test {
             fn repo_when_ref_is_tag() {
                 test(
                     |ctx| Parameters {
-                        reference: Some(Reference::_Tag(ctx.tag.into())),
+                        reference: Some(Reference::Tag(ctx.tag.into())),
                     },
                     |ctx, commit_id| {
                         assert_eq!(commit_id, ctx.commit_v2_id);
