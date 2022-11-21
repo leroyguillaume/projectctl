@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 
-use crate::cmd::CommandKind;
+use crate::cmd::{new::NewCommand, CommandKind};
 
 const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
@@ -17,7 +17,9 @@ pub struct Arguments {
 
 impl Arguments {
     pub fn into_command_kind(self) -> CommandKind {
-        todo!()
+        match self.cmd {
+            CommandArgument::New(args) => CommandKind::New(NewCommand::new(args)),
+        }
     }
 }
 
@@ -59,6 +61,40 @@ impl NewCommandArguments {
             git_branch: None,
             git_tag: None,
             name: String::from("test"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    mod arguments {
+        use super::*;
+
+        mod into_command_kind {
+            use super::*;
+
+            macro_rules! test {
+                ($ident:ident, $cmd:expr, $kind:path) => {
+                    #[test]
+                    fn $ident() {
+                        let args = Arguments {
+                            cmd: $cmd,
+                            verbosity: Verbosity::new(0, 0),
+                        };
+                        match args.into_command_kind() {
+                            $kind(_) => (),
+                        }
+                    }
+                };
+            }
+
+            test!(
+                new,
+                CommandArgument::New(NewCommandArguments::default_for_test()),
+                CommandKind::New
+            );
         }
     }
 }

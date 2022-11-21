@@ -8,7 +8,7 @@ pub struct NewCommand {
 }
 
 impl NewCommand {
-    pub fn _new(args: NewCommandArguments) -> Self {
+    pub fn new(args: NewCommandArguments) -> Self {
         Self { _args: args }
     }
 }
@@ -36,7 +36,7 @@ mod test {
             #[test]
             fn cmd() {
                 let args = NewCommandArguments::default_for_test();
-                let cmd = NewCommand::_new(args.clone());
+                let cmd = NewCommand::new(args.clone());
                 assert_eq!(cmd._args, args);
             }
         }
@@ -46,7 +46,7 @@ mod test {
 
             #[test]
             fn new() {
-                let cmd = NewCommand::_new(NewCommandArguments::default_for_test());
+                let cmd = NewCommand::new(NewCommandArguments::default_for_test());
                 match cmd.kind() {
                     CommandKind::New(_) => (),
                 }
