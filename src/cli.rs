@@ -33,7 +33,7 @@ pub enum CommandArgument {
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
 pub struct NewCommandArguments {
-    #[clap(help = "Destination directory", long, name = "DIR")]
+    #[clap(help = "Destination directory", index = 3, name = "DIR")]
     pub dest: Option<PathBuf>,
 
     #[clap(default_value = DEFAULT_TPL_GIT_REPO_URL, help = "URL to git repository that contains templates", long, name = "URL")]
@@ -54,8 +54,11 @@ pub struct NewCommandArguments {
     )]
     pub git_tag: Option<String>,
 
-    #[clap(help = "Name of the project to create")]
+    #[clap(help = "Name of the project to create", index = 2)]
     pub name: String,
+
+    #[clap(help = "Name of the template to use", index = 1, name = "TEMPLATE")]
+    pub tpl: String,
 }
 
 #[cfg(test)]
@@ -66,7 +69,8 @@ impl NewCommandArguments {
             git: DEFAULT_TPL_GIT_REPO_URL.into(),
             git_branch: None,
             git_tag: None,
-            name: String::from("test"),
+            name: String::from("myproject"),
+            tpl: String::from("mytemplate"),
         }
     }
 }

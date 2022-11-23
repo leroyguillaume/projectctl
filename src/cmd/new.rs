@@ -1,7 +1,7 @@
 use std::{
     env::current_dir,
     fmt::{self, Debug, Formatter},
-    fs::{create_dir_all, remove_dir_all},
+    fs::{copy, create_dir_all, remove_dir_all, ReadDir},
     io,
     path::{Path, PathBuf},
 };
@@ -18,12 +18,14 @@ use crate::{
 use super::{Command, CommandKind, Result};
 
 type CWDFn = dyn Fn() -> io::Result<PathBuf>;
+type ReadDirFn = dyn Fn(&Path) -> io::Result<ReadDir>;
 type TempdirFn = dyn Fn() -> io::Result<PathBuf>;
 
 pub struct NewCommand {
     args: NewCommandArguments,
     cwd_fn: Box<CWDFn>,
     git: Box<dyn Git>,
+    read_dir_fn: Box<ReadDirFn>,
     tempdir_fn: Box<TempdirFn>,
 }
 
@@ -33,6 +35,7 @@ impl NewCommand {
             args,
             cwd_fn: Box::new(current_dir),
             git: Box::new(DefaultGit),
+            read_dir_fn: Box::new(|path| path.read_dir()),
             tempdir_fn: Box::new(|| tempdir().map(|tempdir| tempdir.into_path())),
         }
     }
@@ -44,7 +47,25 @@ impl NewCommand {
         }
     }
 
-    fn render_files_recursively(_tpl_dirpath: &Path, _dest: &Path) -> Result {
+    fn render_files_recursively(
+        tpl_dirpath: &Path,
+        dest: &Path,
+        read_dir_fn: &ReadDirFn,
+    ) -> Result {
+        debug!("Reading {} directory", tpl_dirpath.display());
+        for entry in read_dir_fn(tpl_dirpath).map_err(Error::IO)? {
+            let entry = entry.map_err(Error::IO)?;
+            let path = entry.path();
+            let filename = path.file_name().unwrap();
+            let dest = dest.join(filename);
+            if path.is_dir() {
+                create_dir_all(&dest).map_err(Error::IO)?;
+                Self::render_files_recursively(&path, &dest, read_dir_fn)?;
+            } else if path.is_file() {
+                debug!("Copying {} into {}", path.display(), dest.display());
+                copy(&path, &dest).map_err(Error::IO)?;
+            }
+        }
         Ok(())
     }
 }
@@ -89,7 +110,14 @@ impl Command for NewCommand {
             .git
             .checkout_repository(&self.args.git, git_ref, &tpl_repo_path)
             .map_err(Error::Git)
-            .and_then(|_| Self::render_files_recursively(&tpl_repo_path, &dest));
+            .and_then(|_| {
+                let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
+                if tpl_dirpath.is_dir() {
+                    Self::render_files_recursively(&tpl_dirpath, &dest, self.read_dir_fn.as_ref())
+                } else {
+                    Err(Error::TemplateNotFound(self.args.tpl))
+                }
+            });
         Self::delete_dir(&tpl_repo_path);
         if res.is_err() {
             Self::delete_dir(&dest);
@@ -108,7 +136,10 @@ impl Debug for NewCommand {
 
 #[cfg(test)]
 mod test {
-    use std::fs::File;
+    use std::{
+        fs::{read_to_string, File},
+        io::Write,
+    };
 
     use git2::Repository;
 
@@ -139,6 +170,7 @@ mod test {
                     args: NewCommandArguments::default_for_test(),
                     cwd_fn: Box::new(current_dir),
                     git: Box::new(StubGit::new()),
+                    read_dir_fn: Box::new(|path| path.read_dir()),
                     tempdir_fn: Box::new(|| tempdir().map(|tempdir| tempdir.into_path())),
                 };
                 match cmd.kind() {
@@ -153,10 +185,16 @@ mod test {
             type CheckoutRepositoryFn =
                 dyn Fn(Repository) -> std::result::Result<Repository, git2::Error>;
             type CWDFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
+            type ReadDirFn = dyn Fn() -> io::Result<()>;
             type TempdirFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
 
             struct Context<'a> {
                 cwd: &'a Path,
+                static_file_content: &'a str,
+                static_rel_filepath: &'a Path,
+                templated_file_content: &'a str,
+                templated_rel_filepath: &'a Path,
+                tpl: &'a str,
                 tpl_repo_path: &'a Path,
             }
 
@@ -170,6 +208,7 @@ mod test {
                 checkout_repo_fn: Box<CheckoutRepositoryFn>,
                 cwd_fn: Box<CWDFn>,
                 git_ref: Option<Reference>,
+                read_dir_fn: Box<ReadDirFn>,
                 tempdir_fn: Box<TempdirFn>,
             }
 
@@ -184,11 +223,13 @@ mod test {
                             params: Parameters {
                                 args: NewCommandArguments {
                                     name: name.into(),
+                                    tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
+                                read_dir_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest,
@@ -215,25 +256,24 @@ mod test {
                             params: Parameters {
                                 args: NewCommandArguments {
                                     name: name.into(),
+                                    tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
+                                read_dir_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(move |_| Err(io::Error::from(err_kind))),
                             },
                             dest: ctx.cwd.join(name),
                         }
                     },
-                    |_, dest, res| {
-                        match res.unwrap_err() {
-                            Error::IO(_) => (),
-                            err => {
-                                let expected_err = Error::IO(io::Error::from(err_kind));
-                                panic!("expected {:?} (actual: {:?})", expected_err, err);
-                            }
+                    |_, dest, res| match res.unwrap_err() {
+                        Error::IO(_) => assert!(!dest.is_dir()),
+                        err => {
+                            let expected_err = Error::IO(io::Error::from(err_kind));
+                            panic!("expected {:?} (actual: {:?})", expected_err, err);
                         }
-                        assert!(!dest.is_dir());
                     },
                 );
             }
@@ -250,6 +290,7 @@ mod test {
                             params: Parameters {
                                 args: NewCommandArguments {
                                     name: name.into(),
+                                    tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(move |_| {
@@ -257,21 +298,90 @@ mod test {
                                 }),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
+                                read_dir_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest: ctx.cwd.join(name),
                         }
                     },
-                    |ctx, dest, res| {
-                        match res.unwrap_err() {
-                            Error::Git(_) => (),
-                            err => {
-                                let expected_err = git2::Error::new(err_code, err_class, err_msg);
-                                panic!("expected {:?} (actual: {:?})", expected_err, err);
-                            }
+                    |ctx, dest, res| match res.unwrap_err() {
+                        Error::Git(_) => {
+                            assert!(!ctx.tpl_repo_path.is_dir());
+                            assert!(!dest.is_dir());
                         }
-                        assert!(!ctx.tpl_repo_path.is_dir());
-                        assert!(!dest.is_dir());
+                        err => {
+                            let expected_err = git2::Error::new(err_code, err_class, err_msg);
+                            panic!("expected {:?} (actual: {:?})", expected_err, err);
+                        }
+                    },
+                );
+            }
+
+            #[test]
+            fn err_if_tpl_not_found() {
+                let expected_tpl = "test";
+                test(
+                    move |ctx| {
+                        let name = "test";
+                        Data {
+                            params: Parameters {
+                                args: NewCommandArguments {
+                                    name: name.into(),
+                                    tpl: expected_tpl.into(),
+                                    ..NewCommandArguments::default_for_test()
+                                },
+                                checkout_repo_fn: Box::new(Ok),
+                                cwd_fn: Box::new(Ok),
+                                git_ref: None,
+                                read_dir_fn: Box::new(|| Ok(())),
+                                tempdir_fn: Box::new(Ok),
+                            },
+                            dest: ctx.cwd.join(name),
+                        }
+                    },
+                    |_, _, res| match res.unwrap_err() {
+                        Error::TemplateNotFound(tpl) => {
+                            assert_eq!(tpl, expected_tpl);
+                        }
+                        err => {
+                            let expected_err = Error::TemplateNotFound(expected_tpl.into());
+                            panic!("expected {:?} (actual: {:?})", expected_err, err);
+                        }
+                    },
+                );
+            }
+
+            #[test]
+            fn err_if_list_dir_failed() {
+                let err_kind = io::ErrorKind::PermissionDenied;
+                test(
+                    move |ctx| {
+                        let name = "test";
+                        Data {
+                            params: Parameters {
+                                args: NewCommandArguments {
+                                    name: name.into(),
+                                    tpl: ctx.tpl.into(),
+                                    ..NewCommandArguments::default_for_test()
+                                },
+                                checkout_repo_fn: Box::new(Ok),
+                                cwd_fn: Box::new(Ok),
+                                git_ref: None,
+                                read_dir_fn: Box::new(move || Err(io::Error::from(err_kind))),
+                                tempdir_fn: Box::new(Ok),
+                            },
+                            dest: ctx.cwd.join(name),
+                        }
+                    },
+                    |ctx, dest, res| match res.unwrap_err() {
+                        Error::IO(_) => {
+                            assert!(!ctx.tpl_repo_path.is_dir());
+                            assert!(!dest.is_dir());
+                        }
+                        err => {
+                            let expected_err = io::Error::from(err_kind);
+                            panic!("expected {:?} (actual: {:?})", expected_err, err);
+                        }
                     },
                 );
             }
@@ -284,21 +394,23 @@ mod test {
                         params: Parameters {
                             args: NewCommandArguments {
                                 name: name.into(),
+                                tpl: ctx.tpl.into(),
                                 ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: None,
+                            read_dir_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest: ctx.cwd.join(name),
                     }
-                })
+                });
             }
 
             #[test]
             fn ok_when_custom_args() {
-                ok(move |_| {
+                ok(move |ctx| {
                     let dest = tempdir().unwrap().into_path().join("test");
                     let branch = "develop";
                     Data {
@@ -308,16 +420,18 @@ mod test {
                                 git: format!("{}2", DEFAULT_TPL_GIT_REPO_URL),
                                 git_branch: Some(branch.into()),
                                 git_tag: None,
-                                name: "test".into(),
+                                tpl: ctx.tpl.into(),
+                                ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: Some(Reference::Branch(branch.into())),
+                            read_dir_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest,
                     }
-                })
+                });
             }
 
             #[test]
@@ -330,16 +444,18 @@ mod test {
                             args: NewCommandArguments {
                                 git_tag: Some(tag.into()),
                                 name: name.into(),
+                                tpl: ctx.tpl.into(),
                                 ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: Some(Reference::Tag(tag.into())),
+                            read_dir_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest: ctx.cwd.join(name),
                     }
-                })
+                });
             }
 
             #[inline]
@@ -347,7 +463,12 @@ mod test {
                 test(data_from_fn, |ctx, dest, res| {
                     res.unwrap();
                     assert!(!ctx.tpl_repo_path.is_dir());
-                    assert!(dest.is_dir());
+                    let static_filepath = dest.join(ctx.static_rel_filepath);
+                    let static_file_content = read_to_string(&static_filepath).unwrap();
+                    assert_eq!(static_file_content, ctx.static_file_content);
+                    let templated_filepath = dest.join(ctx.templated_rel_filepath);
+                    let templated_file_content = read_to_string(&templated_filepath).unwrap();
+                    assert_eq!(templated_file_content, ctx.templated_file_content);
                 });
             }
 
@@ -358,8 +479,29 @@ mod test {
             ) {
                 let cwd = tempdir().unwrap().into_path();
                 let tpl_repo_path = tempdir().unwrap().into_path();
+                let tpl = "mytemplate";
+                let tpl_dirpath = tpl_repo_path.join(tpl);
+                let project_src_rel_dirpath = Path::new("{{name}}/src");
+                let project_src_dirpath = tpl_dirpath.join(project_src_rel_dirpath);
+                create_dir_all(&project_src_dirpath).unwrap();
+                let static_rel_filepath = project_src_rel_dirpath.join("static");
+                let static_filepath = tpl_dirpath.join(&static_rel_filepath);
+                let mut static_file = File::create(&static_filepath).unwrap();
+                let static_file_content = "{{name}}";
+                write!(static_file, "{}", static_file_content).unwrap();
+                drop(static_file);
+                let templated_rel_filepath = project_src_rel_dirpath.join("{{name}}.liquid");
+                let templated_filepath = tpl_dirpath.join(&templated_rel_filepath);
+                let mut templated_file = File::create(&templated_filepath).unwrap();
+                write!(templated_file, "{}", static_file_content).unwrap();
+                drop(templated_file);
                 let ctx = Context {
                     cwd: &cwd,
+                    static_file_content,
+                    static_rel_filepath: &static_rel_filepath,
+                    templated_file_content: static_file_content,
+                    templated_rel_filepath: &templated_rel_filepath,
+                    tpl,
                     tpl_repo_path: &tpl_repo_path,
                 };
                 let data = data_from_fn(&ctx);
@@ -380,6 +522,9 @@ mod test {
                         move || (data.params.cwd_fn)(cwd.clone())
                     }),
                     git: Box::new(git),
+                    read_dir_fn: Box::new(move |path| {
+                        (data.params.read_dir_fn)().and_then(|_| path.read_dir())
+                    }),
                     tempdir_fn: Box::new({
                         let tpl_repo_path = tpl_repo_path.clone();
                         move || (data.params.tempdir_fn)(tpl_repo_path.clone())

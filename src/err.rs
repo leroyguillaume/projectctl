@@ -9,6 +9,7 @@ pub enum Error {
     DestinationDirectoryAlreadyExists(PathBuf),
     Git(git2::Error),
     IO(io::Error),
+    TemplateNotFound(String),
 }
 
 impl Error {
@@ -17,6 +18,7 @@ impl Error {
             Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
             Self::Git(_) => exitcode::SOFTWARE,
             Self::IO(_) => exitcode::IOERR,
+            Self::TemplateNotFound(_) => exitcode::CONFIG,
         }
     }
 }
@@ -29,6 +31,7 @@ impl Display for Error {
             }
             Self::Git(err) => write!(f, "{}", err),
             Self::IO(err) => write!(f, "{}", err),
+            Self::TemplateNotFound(tpl) => write!(f, "template '{}' not found", tpl),
         }
     }
 }
@@ -73,6 +76,11 @@ mod test {
                 Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)),
                 exitcode::IOERR
             );
+            test!(
+                template_not_found,
+                Error::TemplateNotFound("test".into()),
+                exitcode::CONFIG
+            );
         }
     }
 
@@ -101,6 +109,14 @@ mod test {
             let cause = io::Error::from(io::ErrorKind::PermissionDenied);
             let str = cause.to_string();
             let err = Error::IO(cause);
+            assert_eq!(err.to_string(), str);
+        }
+
+        #[test]
+        fn template_not_found() {
+            let tpl = "test";
+            let str = format!("template '{}' not found", tpl);
+            let err = Error::TemplateNotFound(tpl.into());
             assert_eq!(err.to_string(), str);
         }
     }
