@@ -5,6 +5,7 @@ use log::debug;
 #[cfg(test)]
 use stub_trait::stub;
 
+#[derive(Debug, Eq, PartialEq)]
 pub enum Reference {
     Branch(String),
     Tag(String),
@@ -123,8 +124,8 @@ mod test {
 
             #[inline]
             fn test<G: Fn(&Context) -> Option<Reference>, A: Fn(&Context, Oid)>(
-                given: G,
-                assert: A,
+                data_from_fn: G,
+                assert_fn: A,
             ) {
                 let remote_dirpath = tempdir().unwrap().into_path();
                 let filepath = remote_dirpath.join("file");
@@ -150,10 +151,12 @@ mod test {
                     commit_v3_id: commit_v3.id(),
                     tag,
                 };
-                let params = given(&ctx);
+                let reference = data_from_fn(&ctx);
                 let url = remote_dirpath.to_str().unwrap();
-                let repo = DefaultGit.checkout_repository(url, params, &dest).unwrap();
-                assert(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
+                let repo = DefaultGit
+                    .checkout_repository(url, reference, &dest)
+                    .unwrap();
+                assert_fn(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
             }
         }
     }

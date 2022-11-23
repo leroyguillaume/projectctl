@@ -5,7 +5,7 @@ use clap_verbosity_flag::Verbosity;
 
 use crate::cmd::{new::NewCommand, CommandKind};
 
-const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
+pub const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
