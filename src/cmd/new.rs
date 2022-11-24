@@ -276,7 +276,8 @@ mod test {
                             assert!(!dest.is_dir());
                         }
                         err => {
-                            let expected_err = git2::Error::new(err_code, err_class, err_msg);
+                            let expected_err =
+                                Error::Git(git2::Error::new(err_code, err_class, err_msg));
                             panic!("expected {:?} (actual: {:?})", expected_err, err);
                         }
                     },
@@ -347,7 +348,7 @@ mod test {
                             assert!(!dest.is_dir());
                         }
                         err => {
-                            let expected_err = io::Error::from(err_kind);
+                            let expected_err = Error::IO(io::Error::from(err_kind));
                             panic!("expected {:?} (actual: {:?})", expected_err, err);
                         }
                     },
