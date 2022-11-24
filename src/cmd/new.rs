@@ -154,9 +154,9 @@ mod test {
 
             type CheckoutRepositoryFn =
                 dyn Fn(Repository) -> std::result::Result<Repository, git2::Error>;
-            type CWDFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
+            type CWDFn = dyn Fn() -> io::Result<()>;
             type RenderRecursivelyFn = dyn Fn() -> Result;
-            type TempdirFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
+            type TempdirFn = dyn Fn() -> io::Result<()>;
 
             struct Context<'a> {
                 cwd: &'a Path,
@@ -193,10 +193,10 @@ mod test {
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
-                                cwd_fn: Box::new(Ok),
+                                cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(Ok),
+                                tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest,
                         }
@@ -226,10 +226,10 @@ mod test {
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
-                                cwd_fn: Box::new(Ok),
+                                cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(move |_| Err(io::Error::from(err_kind))),
+                                tempdir_fn: Box::new(move || Err(io::Error::from(err_kind))),
                             },
                             dest: ctx.cwd.join(name),
                         }
@@ -262,10 +262,10 @@ mod test {
                                 checkout_repo_fn: Box::new(move |_| {
                                     Err(git2::Error::new(err_code, err_class, err_msg))
                                 }),
-                                cwd_fn: Box::new(Ok),
+                                cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(Ok),
+                                tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
                         }
@@ -298,10 +298,10 @@ mod test {
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
-                                cwd_fn: Box::new(Ok),
+                                cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(Ok),
+                                tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
                         }
@@ -332,12 +332,12 @@ mod test {
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(Ok),
-                                cwd_fn: Box::new(Ok),
+                                cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(move || {
                                     Err(Error::IO(io::Error::from(err_kind)))
                                 }),
-                                tempdir_fn: Box::new(Ok),
+                                tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
                         }
@@ -367,10 +367,10 @@ mod test {
                                 ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
-                            cwd_fn: Box::new(Ok),
+                            cwd_fn: Box::new(|| Ok(())),
                             git_ref: None,
                             render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(Ok),
+                            tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest: ctx.cwd.join(name),
                     }
@@ -393,10 +393,10 @@ mod test {
                                 ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
-                            cwd_fn: Box::new(Ok),
+                            cwd_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Branch(branch.into())),
                             render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(Ok),
+                            tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest,
                     }
@@ -417,10 +417,10 @@ mod test {
                                 ..NewCommandArguments::default_for_test()
                             },
                             checkout_repo_fn: Box::new(Ok),
-                            cwd_fn: Box::new(Ok),
+                            cwd_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Tag(tag.into())),
                             render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(Ok),
+                            tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest: ctx.cwd.join(name),
                     }
@@ -456,11 +456,19 @@ mod test {
                     .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
                     .with_stub_of_create_temp_dir({
                         let tpl_repo_path = tpl_repo_path.clone();
-                        move |_| (data.params.tempdir_fn)(tpl_repo_path.clone()).map_err(Error::IO)
+                        move |_| {
+                            (data.params.tempdir_fn)()
+                                .map(|_| tpl_repo_path.clone())
+                                .map_err(Error::IO)
+                        }
                     })
                     .with_stub_of_cwd({
                         let cwd = cwd.clone();
-                        move |_| (data.params.cwd_fn)(cwd.clone()).map_err(Error::IO)
+                        move |_| {
+                            (data.params.cwd_fn)()
+                                .map(|_| cwd.clone())
+                                .map_err(Error::IO)
+                        }
                     })
                     .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO));
                 let git = StubGit::new().with_stub_of_checkout_repository({
