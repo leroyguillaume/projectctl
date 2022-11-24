@@ -235,7 +235,7 @@ mod test {
                         }
                     },
                     |_, dest, res| match res.unwrap_err() {
-                        Error::IO(_) => assert!(!dest.is_dir()),
+                        Error::IO(_) => assert!(!dest.exists()),
                         err => {
                             let expected_err = Error::IO(io::Error::from(err_kind));
                             panic!("expected {:?} (actual: {:?})", expected_err, err);
@@ -272,8 +272,8 @@ mod test {
                     },
                     |ctx, dest, res| match res.unwrap_err() {
                         Error::Git(_) => {
-                            assert!(!ctx.tpl_repo_path.is_dir());
-                            assert!(!dest.is_dir());
+                            assert!(!ctx.tpl_repo_path.exists());
+                            assert!(!dest.exists());
                         }
                         err => {
                             let expected_err =
@@ -344,8 +344,8 @@ mod test {
                     },
                     |ctx, dest, res| match res.unwrap_err() {
                         Error::IO(_) => {
-                            assert!(!ctx.tpl_repo_path.is_dir());
-                            assert!(!dest.is_dir());
+                            assert!(!ctx.tpl_repo_path.exists());
+                            assert!(!dest.exists());
                         }
                         err => {
                             let expected_err = Error::IO(io::Error::from(err_kind));
@@ -431,8 +431,8 @@ mod test {
             fn ok<D: Fn(&Context) -> Data>(data_from_fn: D) {
                 test(data_from_fn, |ctx, dest, res| {
                     res.unwrap();
-                    assert!(dest.is_dir());
-                    assert!(!ctx.tpl_repo_path.is_dir());
+                    assert!(dest.exists());
+                    assert!(!ctx.tpl_repo_path.exists());
                 });
             }
 

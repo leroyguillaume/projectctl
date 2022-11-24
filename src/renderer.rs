@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use log::debug;
 #[cfg(test)]
 use stub_trait::stub;
 
@@ -7,6 +8,8 @@ use crate::{
     err::Error,
     fs::{DefaultFileSystem, FileSystem},
 };
+
+const GIT_DIRNAME: &str = ".git";
 
 pub type Result = std::result::Result<(), Error>;
 
@@ -29,16 +32,25 @@ impl DefaultRenderer {
 
 impl Renderer for DefaultRenderer {
     fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path) -> Result {
+        debug!(
+            "Rendering files in {} recursively into {}",
+            tpl_dirpath.display(),
+            dest.display()
+        );
         for entry in self.fs.read_dir(tpl_dirpath)? {
             let entry = entry.map_err(Error::IO)?;
             let path = entry.path();
             let filename = path.file_name().unwrap();
-            let dest = dest.join(filename);
-            if path.is_dir() {
-                self.fs.create_dir(&dest)?;
-                self.render_recursively(&path, &dest)?;
-            } else if path.is_file() {
-                self.fs.copy(&path, &dest)?;
+            if filename == GIT_DIRNAME {
+                debug!("Ignoring {} directory", GIT_DIRNAME);
+            } else {
+                let dest = dest.join(filename);
+                if path.is_dir() {
+                    self.fs.create_dir(&dest)?;
+                    self.render_recursively(&path, &dest)?;
+                } else if path.is_file() {
+                    self.fs.copy(&path, &dest)?;
+                }
             }
         }
         Ok(())
@@ -52,6 +64,7 @@ mod test {
         io::{self, Write},
     };
 
+    use git2::Repository;
     use tempfile::tempdir;
 
     use crate::fs::{DirEntries, StubFileSystem};
@@ -176,6 +189,7 @@ mod test {
                     },
                     |ctx, res| {
                         res.unwrap();
+                        assert!(!ctx.dest.join(GIT_DIRNAME).exists());
                         let static_filepath = ctx.dest.join(ctx.static_rel_filepath);
                         let static_file_content = read_to_string(&static_filepath).unwrap();
                         assert_eq!(static_file_content, ctx.static_file_content);
@@ -193,6 +207,7 @@ mod test {
             ) {
                 let dest = tempdir().unwrap().into_path();
                 let tpl_dirpath = tempdir().unwrap().into_path();
+                Repository::init(&tpl_dirpath).unwrap();
                 let project_src_rel_dirpath = Path::new("{{name}}/src");
                 let project_src_dirpath = tpl_dirpath.join(project_src_rel_dirpath);
                 create_dir_all(&project_src_dirpath).unwrap();
