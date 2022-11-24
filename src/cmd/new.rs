@@ -1,69 +1,54 @@
 use std::{
-    env::current_dir,
     fmt::{self, Debug, Formatter},
-    fs::{copy, create_dir_all, remove_dir_all, ReadDir},
-    io,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use log::debug;
-use tempfile::tempdir;
+use log::{debug, warn};
 
 use crate::{
     cli::NewCommandArguments,
     err::Error,
+    fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
 };
 
 use super::{Command, CommandKind, Result};
 
-type CWDFn = dyn Fn() -> io::Result<PathBuf>;
-type ReadDirFn = dyn Fn(&Path) -> io::Result<ReadDir>;
-type TempdirFn = dyn Fn() -> io::Result<PathBuf>;
-
 pub struct NewCommand {
     args: NewCommandArguments,
-    cwd_fn: Box<CWDFn>,
+    fs: Box<dyn FileSystem>,
     git: Box<dyn Git>,
-    read_dir_fn: Box<ReadDirFn>,
-    tempdir_fn: Box<TempdirFn>,
 }
 
 impl NewCommand {
     pub fn new(args: NewCommandArguments) -> Self {
         Self {
             args,
-            cwd_fn: Box::new(current_dir),
+            fs: Box::new(DefaultFileSystem),
             git: Box::new(DefaultGit),
-            read_dir_fn: Box::new(|path| path.read_dir()),
-            tempdir_fn: Box::new(|| tempdir().map(|tempdir| tempdir.into_path())),
         }
     }
 
     #[inline]
-    fn delete_dir(path: &Path) {
-        if let Err(err) = remove_dir_all(path) {
-            debug!("Unable to delete {}: {}", path.display(), err);
+    fn delete_dir(path: &Path, fs: &dyn FileSystem) {
+        if let Err(err) = fs.delete_dir(path) {
+            warn!("Unable to delete {}: {}", path.display(), err);
         }
     }
 
-    fn render_files_recursively(
-        tpl_dirpath: &Path,
-        dest: &Path,
-        read_dir_fn: &ReadDirFn,
-    ) -> Result {
+    fn render_files_recursively(tpl_dirpath: &Path, dest: &Path, fs: &dyn FileSystem) -> Result {
         debug!("Reading {} directory", tpl_dirpath.display());
-        for entry in read_dir_fn(tpl_dirpath).map_err(Error::IO)? {
+        for entry in fs.read_dir(tpl_dirpath)? {
             let entry = entry.map_err(Error::IO)?;
             let path = entry.path();
             let filename = path.file_name().unwrap();
             let dest = dest.join(filename);
             if path.is_dir() {
-                create_dir_all(&dest).map_err(Error::IO)?;
-                Self::render_files_recursively(&path, &dest, read_dir_fn)?;
+                fs.create_dir(&dest)?;
+                Self::render_files_recursively(&path, &dest, fs)?;
             } else if path.is_file() {
                 debug!("Copying {} into {}", path.display(), dest.display());
-                copy(&path, &dest).map_err(Error::IO)?;
+                fs.copy(&path, &dest)?;
             }
         }
         Ok(())
@@ -85,20 +70,17 @@ impl Command for NewCommand {
             })
             .unwrap_or_else(|| {
                 debug!("No destination directory set, using current working directory as parent");
-                (self.cwd_fn)().map(|cwd| cwd.join(&self.args.name))
-            })
-            .map_err(Error::IO)?;
+                self.fs.cwd().map(|cwd| cwd.join(&self.args.name))
+            })?;
         if dest.exists() {
             return Err(Error::DestinationDirectoryAlreadyExists(dest));
         }
-        debug!("Creating {} directory", dest.display());
-        create_dir_all(&dest).map_err(Error::IO)?;
-        debug!("Creating temporary directory");
-        let tpl_repo_path = match (self.tempdir_fn)() {
+        self.fs.create_dir(&dest)?;
+        let tpl_repo_path = match self.fs.create_temp_dir() {
             Ok(path) => path,
             Err(err) => {
-                Self::delete_dir(&dest);
-                return Err(Error::IO(err));
+                Self::delete_dir(&dest, self.fs.as_ref());
+                return Err(err);
             }
         };
         let git_ref = self
@@ -113,14 +95,14 @@ impl Command for NewCommand {
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
-                    Self::render_files_recursively(&tpl_dirpath, &dest, self.read_dir_fn.as_ref())
+                    Self::render_files_recursively(&tpl_dirpath, &dest, self.fs.as_ref())
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
                 }
             });
-        Self::delete_dir(&tpl_repo_path);
+        Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
         if res.is_err() {
-            Self::delete_dir(&dest);
+            Self::delete_dir(&dest, self.fs.as_ref());
         }
         res
     }
@@ -137,13 +119,15 @@ impl Debug for NewCommand {
 #[cfg(test)]
 mod test {
     use std::{
-        fs::{read_to_string, File},
-        io::Write,
+        fs::{copy, create_dir_all, read_to_string, remove_dir_all, File},
+        io::{self, Write},
+        path::PathBuf,
     };
 
     use git2::Repository;
+    use tempfile::tempdir;
 
-    use crate::{cli::DEFAULT_TPL_GIT_REPO_URL, git::StubGit};
+    use crate::{cli::DEFAULT_TPL_GIT_REPO_URL, fs::StubFileSystem, git::StubGit};
 
     use super::*;
 
@@ -168,10 +152,8 @@ mod test {
             fn new() {
                 let cmd = NewCommand {
                     args: NewCommandArguments::default_for_test(),
-                    cwd_fn: Box::new(current_dir),
+                    fs: Box::new(StubFileSystem::new()),
                     git: Box::new(StubGit::new()),
-                    read_dir_fn: Box::new(|path| path.read_dir()),
-                    tempdir_fn: Box::new(|| tempdir().map(|tempdir| tempdir.into_path())),
                 };
                 match cmd.kind() {
                     CommandKind::New(_) => (),
@@ -505,6 +487,25 @@ mod test {
                     tpl_repo_path: &tpl_repo_path,
                 };
                 let data = data_from_fn(&ctx);
+                let fs = StubFileSystem::new()
+                    .with_stub_of_copy(|_, src, dest| {
+                        copy(src, dest).map(|_| ()).map_err(Error::IO)
+                    })
+                    .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
+                    .with_stub_of_create_temp_dir({
+                        let tpl_repo_path = tpl_repo_path.clone();
+                        move |_| (data.params.tempdir_fn)(tpl_repo_path.clone()).map_err(Error::IO)
+                    })
+                    .with_stub_of_cwd({
+                        let cwd = cwd.clone();
+                        move |_| (data.params.cwd_fn)(cwd.clone()).map_err(Error::IO)
+                    })
+                    .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO))
+                    .with_stub_of_read_dir(move |_, path| {
+                        (data.params.read_dir_fn)()
+                            .and_then(|_| path.read_dir())
+                            .map_err(Error::IO)
+                    });
                 let git = StubGit::new().with_stub_of_checkout_repository({
                     let expected_url = data.params.args.git.clone();
                     let tpl_repo_path = tpl_repo_path.clone();
@@ -517,18 +518,8 @@ mod test {
                 });
                 let cmd = NewCommand {
                     args: data.params.args,
-                    cwd_fn: Box::new({
-                        let cwd = cwd.clone();
-                        move || (data.params.cwd_fn)(cwd.clone())
-                    }),
+                    fs: Box::new(fs),
                     git: Box::new(git),
-                    read_dir_fn: Box::new(move |path| {
-                        (data.params.read_dir_fn)().and_then(|_| path.read_dir())
-                    }),
-                    tempdir_fn: Box::new({
-                        let tpl_repo_path = tpl_repo_path.clone();
-                        move || (data.params.tempdir_fn)(tpl_repo_path.clone())
-                    }),
                 };
                 assert_fn(&ctx, &data.dest, cmd.run());
             }

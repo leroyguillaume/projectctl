@@ -1,6 +1,7 @@
 mod cli;
 mod cmd;
 mod err;
+mod fs;
 mod git;
 
 use std::process::exit;
