@@ -10,6 +10,7 @@ use crate::{
     err::Error,
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
+    renderer::{DefaultRenderer, Renderer},
 };
 
 use super::{Command, CommandKind, Result};
@@ -18,6 +19,7 @@ pub struct NewCommand {
     args: NewCommandArguments,
     fs: Box<dyn FileSystem>,
     git: Box<dyn Git>,
+    renderer: Box<dyn Renderer>,
 }
 
 impl NewCommand {
@@ -26,6 +28,7 @@ impl NewCommand {
             args,
             fs: Box::new(DefaultFileSystem),
             git: Box::new(DefaultGit),
+            renderer: Box::new(DefaultRenderer::new()),
         }
     }
 
@@ -34,24 +37,6 @@ impl NewCommand {
         if let Err(err) = fs.delete_dir(path) {
             warn!("Unable to delete {}: {}", path.display(), err);
         }
-    }
-
-    fn render_files_recursively(tpl_dirpath: &Path, dest: &Path, fs: &dyn FileSystem) -> Result {
-        debug!("Reading {} directory", tpl_dirpath.display());
-        for entry in fs.read_dir(tpl_dirpath)? {
-            let entry = entry.map_err(Error::IO)?;
-            let path = entry.path();
-            let filename = path.file_name().unwrap();
-            let dest = dest.join(filename);
-            if path.is_dir() {
-                fs.create_dir(&dest)?;
-                Self::render_files_recursively(&path, &dest, fs)?;
-            } else if path.is_file() {
-                debug!("Copying {} into {}", path.display(), dest.display());
-                fs.copy(&path, &dest)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -95,7 +80,7 @@ impl Command for NewCommand {
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
-                    Self::render_files_recursively(&tpl_dirpath, &dest, self.fs.as_ref())
+                    self.renderer.render_recursively(&tpl_dirpath, &dest)
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
                 }
@@ -119,15 +104,17 @@ impl Debug for NewCommand {
 #[cfg(test)]
 mod test {
     use std::{
-        fs::{copy, create_dir_all, read_to_string, remove_dir_all, File},
-        io::{self, Write},
+        fs::{create_dir_all, remove_dir_all, File},
+        io::{self},
         path::PathBuf,
     };
 
     use git2::Repository;
     use tempfile::tempdir;
 
-    use crate::{cli::DEFAULT_TPL_GIT_REPO_URL, fs::StubFileSystem, git::StubGit};
+    use crate::{
+        cli::DEFAULT_TPL_GIT_REPO_URL, fs::StubFileSystem, git::StubGit, renderer::StubRenderer,
+    };
 
     use super::*;
 
@@ -154,6 +141,7 @@ mod test {
                     args: NewCommandArguments::default_for_test(),
                     fs: Box::new(StubFileSystem::new()),
                     git: Box::new(StubGit::new()),
+                    renderer: Box::new(StubRenderer::new()),
                 };
                 match cmd.kind() {
                     CommandKind::New(_) => (),
@@ -167,15 +155,11 @@ mod test {
             type CheckoutRepositoryFn =
                 dyn Fn(Repository) -> std::result::Result<Repository, git2::Error>;
             type CWDFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
-            type ReadDirFn = dyn Fn() -> io::Result<()>;
+            type RenderRecursivelyFn = dyn Fn() -> Result;
             type TempdirFn = dyn Fn(PathBuf) -> io::Result<PathBuf>;
 
             struct Context<'a> {
                 cwd: &'a Path,
-                static_file_content: &'a str,
-                static_rel_filepath: &'a Path,
-                templated_file_content: &'a str,
-                templated_rel_filepath: &'a Path,
                 tpl: &'a str,
                 tpl_repo_path: &'a Path,
             }
@@ -190,7 +174,7 @@ mod test {
                 checkout_repo_fn: Box<CheckoutRepositoryFn>,
                 cwd_fn: Box<CWDFn>,
                 git_ref: Option<Reference>,
-                read_dir_fn: Box<ReadDirFn>,
+                render_recursively_fn: Box<RenderRecursivelyFn>,
                 tempdir_fn: Box<TempdirFn>,
             }
 
@@ -211,7 +195,7 @@ mod test {
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
-                                read_dir_fn: Box::new(|| Ok(())),
+                                render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest,
@@ -244,7 +228,7 @@ mod test {
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
-                                read_dir_fn: Box::new(|| Ok(())),
+                                render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(move |_| Err(io::Error::from(err_kind))),
                             },
                             dest: ctx.cwd.join(name),
@@ -280,7 +264,7 @@ mod test {
                                 }),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
-                                read_dir_fn: Box::new(|| Ok(())),
+                                render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest: ctx.cwd.join(name),
@@ -315,7 +299,7 @@ mod test {
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
-                                read_dir_fn: Box::new(|| Ok(())),
+                                render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest: ctx.cwd.join(name),
@@ -334,7 +318,7 @@ mod test {
             }
 
             #[test]
-            fn err_if_list_dir_failed() {
+            fn err_if_render_recursively_failed() {
                 let err_kind = io::ErrorKind::PermissionDenied;
                 test(
                     move |ctx| {
@@ -349,7 +333,9 @@ mod test {
                                 checkout_repo_fn: Box::new(Ok),
                                 cwd_fn: Box::new(Ok),
                                 git_ref: None,
-                                read_dir_fn: Box::new(move || Err(io::Error::from(err_kind))),
+                                render_recursively_fn: Box::new(move || {
+                                    Err(Error::IO(io::Error::from(err_kind)))
+                                }),
                                 tempdir_fn: Box::new(Ok),
                             },
                             dest: ctx.cwd.join(name),
@@ -382,7 +368,7 @@ mod test {
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: None,
-                            read_dir_fn: Box::new(|| Ok(())),
+                            render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest: ctx.cwd.join(name),
@@ -408,7 +394,7 @@ mod test {
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: Some(Reference::Branch(branch.into())),
-                            read_dir_fn: Box::new(|| Ok(())),
+                            render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest,
@@ -432,7 +418,7 @@ mod test {
                             checkout_repo_fn: Box::new(Ok),
                             cwd_fn: Box::new(Ok),
                             git_ref: Some(Reference::Tag(tag.into())),
-                            read_dir_fn: Box::new(|| Ok(())),
+                            render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(Ok),
                         },
                         dest: ctx.cwd.join(name),
@@ -444,13 +430,8 @@ mod test {
             fn ok<D: Fn(&Context) -> Data>(data_from_fn: D) {
                 test(data_from_fn, |ctx, dest, res| {
                     res.unwrap();
+                    assert!(dest.is_dir());
                     assert!(!ctx.tpl_repo_path.is_dir());
-                    let static_filepath = dest.join(ctx.static_rel_filepath);
-                    let static_file_content = read_to_string(&static_filepath).unwrap();
-                    assert_eq!(static_file_content, ctx.static_file_content);
-                    let templated_filepath = dest.join(ctx.templated_rel_filepath);
-                    let templated_file_content = read_to_string(&templated_filepath).unwrap();
-                    assert_eq!(templated_file_content, ctx.templated_file_content);
                 });
             }
 
@@ -462,35 +443,15 @@ mod test {
                 let cwd = tempdir().unwrap().into_path();
                 let tpl_repo_path = tempdir().unwrap().into_path();
                 let tpl = "mytemplate";
-                let tpl_dirpath = tpl_repo_path.join(tpl);
-                let project_src_rel_dirpath = Path::new("{{name}}/src");
-                let project_src_dirpath = tpl_dirpath.join(project_src_rel_dirpath);
-                create_dir_all(&project_src_dirpath).unwrap();
-                let static_rel_filepath = project_src_rel_dirpath.join("static");
-                let static_filepath = tpl_dirpath.join(&static_rel_filepath);
-                let mut static_file = File::create(&static_filepath).unwrap();
-                let static_file_content = "{{name}}";
-                write!(static_file, "{}", static_file_content).unwrap();
-                drop(static_file);
-                let templated_rel_filepath = project_src_rel_dirpath.join("{{name}}.liquid");
-                let templated_filepath = tpl_dirpath.join(&templated_rel_filepath);
-                let mut templated_file = File::create(&templated_filepath).unwrap();
-                write!(templated_file, "{}", static_file_content).unwrap();
-                drop(templated_file);
+                let expected_tpl_dirpath = tpl_repo_path.join(tpl);
+                create_dir_all(&expected_tpl_dirpath).unwrap();
                 let ctx = Context {
                     cwd: &cwd,
-                    static_file_content,
-                    static_rel_filepath: &static_rel_filepath,
-                    templated_file_content: static_file_content,
-                    templated_rel_filepath: &templated_rel_filepath,
                     tpl,
                     tpl_repo_path: &tpl_repo_path,
                 };
                 let data = data_from_fn(&ctx);
                 let fs = StubFileSystem::new()
-                    .with_stub_of_copy(|_, src, dest| {
-                        copy(src, dest).map(|_| ()).map_err(Error::IO)
-                    })
                     .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
                     .with_stub_of_create_temp_dir({
                         let tpl_repo_path = tpl_repo_path.clone();
@@ -500,12 +461,7 @@ mod test {
                         let cwd = cwd.clone();
                         move |_| (data.params.cwd_fn)(cwd.clone()).map_err(Error::IO)
                     })
-                    .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO))
-                    .with_stub_of_read_dir(move |_, path| {
-                        (data.params.read_dir_fn)()
-                            .and_then(|_| path.read_dir())
-                            .map_err(Error::IO)
-                    });
+                    .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO));
                 let git = StubGit::new().with_stub_of_checkout_repository({
                     let expected_url = data.params.args.git.clone();
                     let tpl_repo_path = tpl_repo_path.clone();
@@ -516,9 +472,18 @@ mod test {
                         (data.params.checkout_repo_fn)(Repository::init(&tpl_repo_path).unwrap())
                     }
                 });
+                let renderer = StubRenderer::new().with_stub_of_render_recursively({
+                    let expected_dest = data.dest.clone();
+                    move |_, tpl_dirpath, dest| {
+                        assert_eq!(tpl_dirpath, expected_tpl_dirpath);
+                        assert_eq!(dest, expected_dest);
+                        (data.params.render_recursively_fn)()
+                    }
+                });
                 let cmd = NewCommand {
                     args: data.params.args,
                     fs: Box::new(fs),
+                    renderer: Box::new(renderer),
                     git: Box::new(git),
                 };
                 assert_fn(&ctx, &data.dest, cmd.run());

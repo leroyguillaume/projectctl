@@ -3,6 +3,7 @@ mod cmd;
 mod err;
 mod fs;
 mod git;
+mod renderer;
 
 use std::process::exit;
 

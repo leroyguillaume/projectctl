@@ -1,6 +1,7 @@
 use std::{
     env::current_dir,
-    fs::{copy, create_dir_all, remove_dir_all, ReadDir},
+    fs::{copy, create_dir_all, remove_dir_all, DirEntry},
+    io,
     path::{Path, PathBuf},
 };
 
@@ -11,6 +12,7 @@ use tempfile::tempdir;
 
 use crate::err::Error;
 
+pub type DirEntries = dyn Iterator<Item = io::Result<DirEntry>>;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg_attr(test, stub)]
@@ -25,7 +27,7 @@ pub trait FileSystem {
 
     fn delete_dir(&self, path: &Path) -> Result<()>;
 
-    fn read_dir(&self, path: &Path) -> Result<ReadDir>;
+    fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>>;
 }
 
 pub struct DefaultFileSystem;
@@ -60,9 +62,11 @@ impl FileSystem for DefaultFileSystem {
         remove_dir_all(path).map_err(Error::IO)
     }
 
-    fn read_dir(&self, path: &Path) -> Result<ReadDir> {
+    fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>> {
         debug!("Reading directory {}", path.display());
-        path.read_dir().map_err(Error::IO)
+        path.read_dir()
+            .map(|it| Box::new(it) as Box<DirEntries>)
+            .map_err(Error::IO)
     }
 }
 
