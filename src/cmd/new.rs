@@ -10,7 +10,7 @@ use crate::{
     err::Error,
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
-    renderer::{DefaultRenderer, Renderer},
+    renderer::{LiquidRenderer, Renderer},
 };
 
 use super::{Command, CommandKind, Result};
@@ -28,7 +28,7 @@ impl NewCommand {
             args,
             fs: Box::new(DefaultFileSystem),
             git: Box::new(DefaultGit),
-            renderer: Box::new(DefaultRenderer::new()),
+            renderer: Box::new(LiquidRenderer::new()),
         }
     }
 
@@ -80,7 +80,8 @@ impl Command for NewCommand {
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
-                    self.renderer.render_recursively(&tpl_dirpath, &dest)
+                    self.renderer
+                        .render_recursively(&tpl_dirpath, &dest, vec![])
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
                 }
@@ -483,7 +484,7 @@ mod test {
                 });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let expected_dest = data.dest.clone();
-                    move |_, tpl_dirpath, dest| {
+                    move |_, tpl_dirpath, dest, _| {
                         assert_eq!(tpl_dirpath, expected_tpl_dirpath);
                         assert_eq!(dest, expected_dest);
                         (data.params.render_recursively_fn)()

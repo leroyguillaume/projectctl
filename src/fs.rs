@@ -1,6 +1,6 @@
 use std::{
     env::current_dir,
-    fs::{copy, create_dir_all, remove_dir_all, DirEntry},
+    fs::{copy, create_dir_all, remove_dir_all, DirEntry, File, OpenOptions},
     io,
     path::{Path, PathBuf},
 };
@@ -26,6 +26,8 @@ pub trait FileSystem {
     fn cwd(&self) -> Result<PathBuf>;
 
     fn delete_dir(&self, path: &Path) -> Result<()>;
+
+    fn open(&self, path: &Path, opts: OpenOptions) -> Result<File>;
 
     fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>>;
 }
@@ -60,6 +62,11 @@ impl FileSystem for DefaultFileSystem {
     fn delete_dir(&self, path: &Path) -> Result<()> {
         debug!("Delete directory {}", path.display());
         remove_dir_all(path).map_err(Error::IO)
+    }
+
+    fn open(&self, path: &Path, opts: OpenOptions) -> Result<File> {
+        debug!("Opening file {}", path.display());
+        opts.open(path).map_err(Error::IO)
     }
 
     fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>> {
@@ -139,6 +146,37 @@ mod test {
                 let path = tempdir().unwrap().into_path();
                 DefaultFileSystem.delete_dir(&path).unwrap();
                 assert!(!path.is_dir());
+            }
+        }
+
+        mod open {
+            use super::*;
+
+            #[test]
+            fn ok_when_w_mode_and_file_does_not_exist() {
+                test(
+                    |_| OpenOptions::new().create(true).write(true).to_owned(),
+                    |mut file| write!(file, "test").unwrap(),
+                );
+            }
+
+            #[test]
+            fn ok_when_w_mode_and_file_exists() {
+                test(
+                    |path| {
+                        File::create(path).unwrap();
+                        OpenOptions::new().truncate(true).write(true).to_owned()
+                    },
+                    |mut file| write!(file, "test").unwrap(),
+                );
+            }
+
+            #[inline]
+            fn test<D: Fn(&Path) -> OpenOptions, A: Fn(File)>(data_from_fn: D, assert_fn: A) {
+                let path = tempdir().unwrap().into_path().join("test");
+                let opts = data_from_fn(&path);
+                let file = DefaultFileSystem.open(&path, opts).unwrap();
+                assert_fn(file);
             }
         }
 

@@ -9,6 +9,7 @@ pub enum Error {
     DestinationDirectoryAlreadyExists(PathBuf),
     Git(git2::Error),
     IO(io::Error),
+    Liquid(liquid::Error),
     TemplateNotFound(String),
 }
 
@@ -18,6 +19,7 @@ impl Error {
             Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
             Self::Git(_) => exitcode::SOFTWARE,
             Self::IO(_) => exitcode::IOERR,
+            Self::Liquid(_) => exitcode::SOFTWARE,
             Self::TemplateNotFound(_) => exitcode::CONFIG,
         }
     }
@@ -31,6 +33,7 @@ impl Display for Error {
             }
             Self::Git(err) => write!(f, "{}", err),
             Self::IO(err) => write!(f, "{}", err),
+            Self::Liquid(err) => write!(f, "{}", err),
             Self::TemplateNotFound(tpl) => write!(f, "template '{}' not found", tpl),
         }
     }
@@ -79,6 +82,11 @@ mod test {
                 exitcode::IOERR
             );
             test!(
+                liquid,
+                Error::Liquid(liquid::Error::with_msg("error")),
+                exitcode::SOFTWARE
+            );
+            test!(
                 template_not_found,
                 Error::TemplateNotFound("test".into()),
                 exitcode::CONFIG
@@ -111,6 +119,14 @@ mod test {
             let cause = io::Error::from(io::ErrorKind::PermissionDenied);
             let str = cause.to_string();
             let err = Error::IO(cause);
+            assert_eq!(err.to_string(), str);
+        }
+
+        #[test]
+        fn liquid() {
+            let cause = liquid::Error::with_msg("error");
+            let str = cause.to_string();
+            let err = Error::Liquid(cause);
             assert_eq!(err.to_string(), str);
         }
 
