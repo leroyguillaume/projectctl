@@ -78,7 +78,7 @@ impl NewCommandArguments {
             git_tag: None,
             name: String::from("myproject"),
             tpl: String::from("mytemplate"),
-            vars: vec![],
+            vars: vec![("myvar".into(), "myvalue".into())],
         }
     }
 }
