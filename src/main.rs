@@ -25,7 +25,7 @@ fn main() {
     let rc = match res {
         Ok(()) => exitcode::OK,
         Err(err) => {
-            error!("{}", err);
+            error!("Error: {}", err);
             err.to_return_code()
         }
     };

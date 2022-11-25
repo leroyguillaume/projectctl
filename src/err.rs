@@ -27,7 +27,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Self::DestinationDirectoryAlreadyExists(path) => {
-                write!(f, "{} already exists", path.display())
+                write!(f, "directory {} already exists", path.display())
             }
             Self::Git(err) => write!(f, "{}", err),
             Self::IO(err) => write!(f, "{}", err),
@@ -35,6 +35,8 @@ impl Display for Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod test {
@@ -90,7 +92,7 @@ mod test {
         #[test]
         fn destination_directory_already_exists() {
             let path = Path::new("/");
-            let str = format!("{} already exists", path.display());
+            let str = format!("directory {} already exists", path.display());
             let err = Error::DestinationDirectoryAlreadyExists(path.into());
             assert_eq!(err.to_string(), str);
         }
