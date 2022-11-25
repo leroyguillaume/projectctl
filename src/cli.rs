@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    error::Error,
+    fmt::{self, Display, Formatter},
+    path::PathBuf,
+};
 
 use clap::{Args, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
@@ -59,6 +63,9 @@ pub struct NewCommandArguments {
 
     #[clap(help = "Name of the template to use", index = 1, name = "TEMPLATE")]
     pub tpl: String,
+
+    #[clap(help = "Define custom variable", long = "set", name = "KEY=VALUE", number_of_values = 1, short = 'd', value_parser = parse_key_val)]
+    pub vars: Vec<(String, String)>,
 }
 
 #[cfg(test)]
@@ -71,7 +78,27 @@ impl NewCommandArguments {
             git_tag: None,
             name: String::from("myproject"),
             tpl: String::from("mytemplate"),
+            vars: vec![],
         }
+    }
+}
+
+#[derive(Debug)]
+struct InvalidVariableError(String);
+
+impl Error for InvalidVariableError {}
+
+impl Display for InvalidVariableError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "`{}` does not contain `=`", self.0)
+    }
+}
+
+fn parse_key_val(s: &str) -> Result<(String, String), InvalidVariableError> {
+    if let Some((var, value)) = s.split_once('=') {
+        Ok((var.into(), value.into()))
+    } else {
+        Err(InvalidVariableError(s.into()))
     }
 }
 
