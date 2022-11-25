@@ -204,18 +204,16 @@ mod test {
                     },
                     |_, dest, res| match res.unwrap_err() {
                         Error::DestinationDirectoryAlreadyExists(path) => assert_eq!(path, dest),
-                        err => {
-                            let expected_err =
-                                Error::DestinationDirectoryAlreadyExists(dest.to_path_buf());
-                            panic!("expected {:?} (actual: {:?})", expected_err, err);
-                        }
+                        err => panic!(
+                            "expected DestinationDirectoryAlreadyExists (actual: {:?})",
+                            err
+                        ),
                     },
                 );
             }
 
             #[test]
             fn err_if_tempdir_failed() {
-                let err_kind = io::ErrorKind::PermissionDenied;
                 test(
                     move |ctx| {
                         let name = "test";
@@ -230,26 +228,22 @@ mod test {
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(move || Err(io::Error::from(err_kind))),
+                                tempdir_fn: Box::new(move || {
+                                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                                }),
                             },
                             dest: ctx.cwd.join(name),
                         }
                     },
                     |_, dest, res| match res.unwrap_err() {
                         Error::IO(_) => assert!(!dest.exists()),
-                        err => {
-                            let expected_err = Error::IO(io::Error::from(err_kind));
-                            panic!("expected {:?} (actual: {:?})", expected_err, err);
-                        }
+                        err => panic!("expected IO (actual: {:?})", err),
                     },
                 );
             }
 
             #[test]
             fn err_if_checkout_failed() {
-                let err_code = git2::ErrorCode::Ambiguous;
-                let err_class = git2::ErrorClass::Callback;
-                let err_msg = "error";
                 test(
                     move |ctx| {
                         let name = "test";
@@ -261,7 +255,11 @@ mod test {
                                     ..NewCommandArguments::default_for_test()
                                 },
                                 checkout_repo_fn: Box::new(move |_| {
-                                    Err(git2::Error::new(err_code, err_class, err_msg))
+                                    Err(git2::Error::new(
+                                        git2::ErrorCode::Ambiguous,
+                                        git2::ErrorClass::Callback,
+                                        "error",
+                                    ))
                                 }),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
@@ -276,11 +274,7 @@ mod test {
                             assert!(!ctx.tpl_repo_path.exists());
                             assert!(!dest.exists());
                         }
-                        err => {
-                            let expected_err =
-                                Error::Git(git2::Error::new(err_code, err_class, err_msg));
-                            panic!("expected {:?} (actual: {:?})", expected_err, err);
-                        }
+                        err => panic!("expected Git (actual: {:?})", err),
                     },
                 );
             }
@@ -311,17 +305,13 @@ mod test {
                         Error::TemplateNotFound(tpl) => {
                             assert_eq!(tpl, expected_tpl);
                         }
-                        err => {
-                            let expected_err = Error::TemplateNotFound(expected_tpl.into());
-                            panic!("expected {:?} (actual: {:?})", expected_err, err);
-                        }
+                        err => panic!("expected TemplateNotFound (actual: {:?})", err),
                     },
                 );
             }
 
             #[test]
             fn err_if_render_recursively_failed() {
-                let err_kind = io::ErrorKind::PermissionDenied;
                 test(
                     move |ctx| {
                         let name = "test";
@@ -336,7 +326,7 @@ mod test {
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 render_recursively_fn: Box::new(move || {
-                                    Err(Error::IO(io::Error::from(err_kind)))
+                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 }),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
@@ -348,10 +338,7 @@ mod test {
                             assert!(!ctx.tpl_repo_path.exists());
                             assert!(!dest.exists());
                         }
-                        err => {
-                            let expected_err = Error::IO(io::Error::from(err_kind));
-                            panic!("expected {:?} (actual: {:?})", expected_err, err);
-                        }
+                        err => panic!("expected IO (actual: {:?})", err),
                     },
                 );
             }
