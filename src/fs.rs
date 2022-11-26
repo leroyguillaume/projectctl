@@ -48,7 +48,7 @@ impl FileSystem for DefaultFileSystem {
     }
 
     fn create_temp_dir(&self) -> Result<PathBuf> {
-        debug!("Creating temporary directory");
+        trace!("Creating temporary directory");
         tempdir()
             .map(|temp_dir| temp_dir.into_path())
             .map_err(Error::IO)
