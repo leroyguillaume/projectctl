@@ -60,7 +60,7 @@ impl FileSystem for DefaultFileSystem {
     }
 
     fn delete_dir(&self, path: &Path) -> Result<()> {
-        debug!("Delete directory {}", path.display());
+        debug!("Deleting directory {}", path.display());
         remove_dir_all(path).map_err(Error::IO)
     }
 
