@@ -65,12 +65,12 @@ impl FileSystem for DefaultFileSystem {
     }
 
     fn open(&self, path: &Path, opts: OpenOptions) -> Result<File> {
-        debug!("Opening file {}", path.display());
+        trace!("Opening file {}", path.display());
         opts.open(path).map_err(Error::IO)
     }
 
     fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>> {
-        debug!("Reading directory {}", path.display());
+        trace!("Reading directory {}", path.display());
         path.read_dir()
             .map(|it| Box::new(it) as Box<DirEntries>)
             .map_err(Error::IO)
