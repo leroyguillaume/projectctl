@@ -4,7 +4,7 @@ use liquid::{
     model::{KString, ScalarCow, Value},
     Object, ParserBuilder,
 };
-use log::debug;
+use log::{debug, info, log_enabled, trace, Level};
 #[cfg(test)]
 use stub_trait::stub;
 
@@ -51,11 +51,11 @@ impl LiquidRenderer {
             let path = entry.path();
             let filename = path.file_name().unwrap().to_string_lossy();
             if filename == GIT_DIRNAME {
-                debug!("Ignoring {} directory", GIT_DIRNAME);
+                trace!("Ignoring {} directory", GIT_DIRNAME);
             } else {
                 debug!("Parsing filename `{}` as Liquid template", filename);
                 let tpl = parser.parse(&filename).map_err(Error::Liquid)?;
-                debug!("Rendering filename");
+                trace!("Rendering filename");
                 let dest_filename = tpl.render(&obj).map_err(Error::Liquid)?;
                 let dest = dest.join(dest_filename);
                 if path.is_dir() {
@@ -96,6 +96,18 @@ impl Renderer for LiquidRenderer {
         dest: &Path,
         vars: Vec<(String, String)>,
     ) -> Result {
+        info!(
+            "Rendering files from template `{}`",
+            tpl_dirpath.file_name().unwrap().to_string_lossy(),
+        );
+        if log_enabled!(Level::Debug) {
+            let s = vars
+                .iter()
+                .map(|(key, value)| format!("{}: {}", key, value))
+                .reduce(|accum, item| format!("{}, {}", accum, item))
+                .unwrap_or_default();
+            debug!("Variables: {{{}}}", s);
+        }
         let mut obj = Object::new();
         for (key, value) in vars.into_iter() {
             obj.insert(KString::from(key), Value::Scalar(ScalarCow::from(value)));

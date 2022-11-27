@@ -4,8 +4,8 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Args, Parser, Subcommand};
-use clap_verbosity_flag::Verbosity;
+use clap::{ArgAction, Args, Parser, Subcommand};
+use log::LevelFilter;
 
 use crate::cmd::{new::NewCommand, CommandKind};
 
@@ -18,13 +18,55 @@ pub struct Arguments {
     pub cmd: CommandArgument,
 
     #[command(flatten)]
-    pub verbosity: Verbosity,
+    pub logging: LoggingArguments,
 }
 
 impl Arguments {
     pub fn into_command_kind(self) -> CommandKind {
         match self.cmd {
             CommandArgument::New(args) => CommandKind::New(NewCommand::new(args)),
+        }
+    }
+}
+
+#[derive(Args, Clone, Debug, Default, Eq, PartialEq)]
+pub struct LoggingArguments {
+    #[arg(
+        action = ArgAction::Count,
+        conflicts_with = "verbose",
+        help = "Less logs per occurence",
+        long,
+        short = 'q',
+    )]
+    pub quiet: u8,
+
+    #[clap(help = "Disable colors in logs", long)]
+    pub no_color: bool,
+
+    #[clap(
+        action = ArgAction::Count,
+        help = "More logs per occurence",
+        long,
+        short = 'v',
+    )]
+    pub verbose: u8,
+}
+
+impl LoggingArguments {
+    pub fn to_level_filter(&self) -> LevelFilter {
+        if self.quiet > 0 {
+            match self.quiet {
+                1 => LevelFilter::Error,
+                _ => LevelFilter::Off,
+            }
+        } else if self.verbose > 0 {
+            match self.verbose {
+                1 => LevelFilter::Info,
+                2 => LevelFilter::Debug,
+                _ => LevelFilter::Trace,
+            }
+        } else {
+            LevelFilter::Warn
         }
     }
 }
@@ -40,7 +82,12 @@ pub struct NewCommandArguments {
     #[clap(help = "Destination directory", index = 3, name = "DIR")]
     pub dest: Option<PathBuf>,
 
-    #[clap(default_value = DEFAULT_TPL_GIT_REPO_URL, help = "URL to git repository that contains templates", long, name = "URL")]
+    #[clap(
+        default_value = DEFAULT_TPL_GIT_REPO_URL,
+        help = "URL to git repository that contains templates",
+        long,
+        name = "URL"
+    )]
     pub git: String,
 
     #[clap(
@@ -64,7 +111,14 @@ pub struct NewCommandArguments {
     #[clap(help = "Name of the template to use", index = 1, name = "TEMPLATE")]
     pub tpl: String,
 
-    #[clap(help = "Define custom variable", long = "set", name = "KEY=VALUE", number_of_values = 1, short = 'd', value_parser = parse_key_val)]
+    #[clap(
+        help = "Define custom variable",
+        long = "set",
+        name = "KEY=VALUE",
+        number_of_values = 1,
+        short = 'd',
+        value_parser = parse_key_val,
+    )]
     pub vars: Vec<(String, String)>,
 }
 
@@ -118,7 +172,7 @@ mod test {
                     fn $ident() {
                         let args = Arguments {
                             cmd: $cmd,
-                            verbosity: Verbosity::new(0, 0),
+                            logging: LoggingArguments::default(),
                         };
                         match args.into_command_kind() {
                             $kind(_) => (),
@@ -132,6 +186,35 @@ mod test {
                 CommandArgument::New(NewCommandArguments::default_for_test()),
                 CommandKind::New
             );
+        }
+    }
+
+    mod logging_arguments {
+        use super::*;
+
+        mod to_level_filter {
+            use super::*;
+
+            macro_rules! test {
+                ($ident:ident, $quiet:literal, $verbose:literal, $lvl:expr) => {
+                    #[test]
+                    fn $ident() {
+                        let args = LoggingArguments {
+                            quiet: $quiet,
+                            no_color: false,
+                            verbose: $verbose,
+                        };
+                        assert_eq!(args.to_level_filter(), $lvl);
+                    }
+                };
+            }
+
+            test!(off, 2, 0, LevelFilter::Off);
+            test!(error, 1, 0, LevelFilter::Error);
+            test!(warn, 0, 0, LevelFilter::Warn);
+            test!(info, 0, 1, LevelFilter::Info);
+            test!(debug, 0, 2, LevelFilter::Debug);
+            test!(trace, 0, 3, LevelFilter::Trace);
         }
     }
 }

@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use crate::{
     cli::NewCommandArguments,
@@ -48,6 +48,7 @@ impl Command for NewCommand {
     }
 
     fn run(self) -> Result {
+        info!("Creating project `{}`", self.args.name);
         let dest = self
             .args
             .dest
