@@ -29,12 +29,12 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Self::DestinationDirectoryAlreadyExists(path) => {
-                write!(f, "directory {} already exists", path.display())
+                write!(f, "Directory {} already exists", path.display())
             }
-            Self::Git(err) => write!(f, "{}", err),
+            Self::Git(err) => write!(f, "git: {}", err),
             Self::IO(err) => write!(f, "{}", err),
             Self::Liquid(err) => write!(f, "{}", err),
-            Self::TemplateNotFound(tpl) => write!(f, "template '{}' not found", tpl),
+            Self::TemplateNotFound(tpl) => write!(f, "Template `{}` not found", tpl),
         }
     }
 }
@@ -100,7 +100,7 @@ mod test {
         #[test]
         fn destination_directory_already_exists() {
             let path = Path::new("/");
-            let str = format!("directory {} already exists", path.display());
+            let str = format!("Directory {} already exists", path.display());
             let err = Error::DestinationDirectoryAlreadyExists(path.into());
             assert_eq!(err.to_string(), str);
         }
@@ -109,7 +109,7 @@ mod test {
         fn git() {
             let cause =
                 git2::Error::new(git2::ErrorCode::Ambiguous, git2::ErrorClass::Callback, "");
-            let str = cause.to_string();
+            let str = format!("git: {}", cause);
             let err = Error::Git(cause);
             assert_eq!(err.to_string(), str);
         }
@@ -133,7 +133,7 @@ mod test {
         #[test]
         fn template_not_found() {
             let tpl = "test";
-            let str = format!("template '{}' not found", tpl);
+            let str = format!("Template `{}` not found", tpl);
             let err = Error::TemplateNotFound(tpl.into());
             assert_eq!(err.to_string(), str);
         }

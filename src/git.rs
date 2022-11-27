@@ -37,7 +37,7 @@ impl Git for DefaultGit {
                 Reference::Branch(branch) => format!("refs/remotes/origin/{}", branch),
                 Reference::Tag(tag) => format!("refs/tags/{}", tag),
             };
-            debug!("Settings HEAD to {}", reference);
+            debug!("Setting HEAD to {}", reference);
             repo.set_head(&reference)?;
         }
         Ok(repo)
