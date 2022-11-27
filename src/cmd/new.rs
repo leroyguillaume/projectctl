@@ -15,7 +15,7 @@ use crate::{
 
 use super::{Command, CommandKind, Result};
 
-const PROJECT_NAME_VAR_NAME: &str = "project-name";
+const NAME_VAR_NAME: &str = "name";
 
 pub struct NewCommand {
     args: NewCommandArguments,
@@ -84,7 +84,7 @@ impl Command for NewCommand {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
                     let mut vars = self.args.vars;
-                    vars.push((PROJECT_NAME_VAR_NAME.into(), self.args.name));
+                    vars.push((NAME_VAR_NAME.into(), self.args.name));
                     self.renderer.render_recursively(&tpl_dirpath, &dest, vars)
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
@@ -476,8 +476,7 @@ mod test {
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let expected_dest = data.dest.clone();
                     let mut expected_vars = data.params.args.vars.clone();
-                    expected_vars
-                        .push((PROJECT_NAME_VAR_NAME.into(), data.params.args.name.clone()));
+                    expected_vars.push((NAME_VAR_NAME.into(), data.params.args.name.clone()));
                     move |_, tpl_dirpath, dest, vars| {
                         assert_eq!(tpl_dirpath, expected_tpl_dirpath);
                         assert_eq!(dest, expected_dest);
