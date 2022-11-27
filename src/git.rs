@@ -100,19 +100,17 @@ mod test {
             #[inline]
             fn write_and_commit<'a>(
                 repo: &'a Repository,
-                filepath: &Path,
+                repo_dirpath: &Path,
+                rel_filepath: &Path,
                 msg: &str,
                 parents: &[&'a Commit],
                 ref_to_update: Option<&str>,
             ) -> Commit<'a> {
-                let mut file = File::create(filepath).unwrap();
+                let mut file = File::create(repo_dirpath.join(rel_filepath)).unwrap();
                 write!(file, "{}", msg).unwrap();
                 drop(file);
-                let relative_filepath = filepath
-                    .strip_prefix(repo.path().parent().unwrap())
-                    .unwrap();
                 let mut index = repo.index().unwrap();
-                index.add_path(relative_filepath).unwrap();
+                index.add_path(rel_filepath).unwrap();
                 let tree_id = index.write_tree().unwrap();
                 let tree = repo.find_tree(tree_id).unwrap();
                 let sig = Signature::now("test", "test@local").unwrap();
@@ -128,17 +126,42 @@ mod test {
                 assert_fn: A,
             ) {
                 let remote_dirpath = tempdir().unwrap().into_path();
-                let filepath = remote_dirpath.join("file");
+                let rel_filepath = Path::new("file");
                 let branch = "develop";
                 let tag = "v2";
                 let remote_repo = Repository::init(&remote_dirpath).unwrap();
-                let commit_v1 = write_and_commit(&remote_repo, &filepath, "v1", &[], Some("HEAD"));
-                let commit_v1_1 =
-                    write_and_commit(&remote_repo, &filepath, "v1_1", &[&commit_v1], None);
-                let commit_v2 =
-                    write_and_commit(&remote_repo, &filepath, "v2", &[&commit_v1], Some("HEAD"));
-                let commit_v3 =
-                    write_and_commit(&remote_repo, &filepath, "v3", &[&commit_v2], Some("HEAD"));
+                let commit_v1 = write_and_commit(
+                    &remote_repo,
+                    &remote_dirpath,
+                    rel_filepath,
+                    "v1",
+                    &[],
+                    Some("HEAD"),
+                );
+                let commit_v1_1 = write_and_commit(
+                    &remote_repo,
+                    &remote_dirpath,
+                    rel_filepath,
+                    "v1_1",
+                    &[&commit_v1],
+                    None,
+                );
+                let commit_v2 = write_and_commit(
+                    &remote_repo,
+                    &remote_dirpath,
+                    rel_filepath,
+                    "v2",
+                    &[&commit_v1],
+                    Some("HEAD"),
+                );
+                let commit_v3 = write_and_commit(
+                    &remote_repo,
+                    &remote_dirpath,
+                    rel_filepath,
+                    "v3",
+                    &[&commit_v2],
+                    Some("HEAD"),
+                );
                 remote_repo.branch(branch, &commit_v1_1, false).unwrap();
                 remote_repo
                     .tag(tag, commit_v2.as_object(), &commit_v1.author(), "v2", false)
