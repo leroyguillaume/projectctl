@@ -66,6 +66,7 @@ impl LiquidRenderer {
                         if ext == LIQUID_EXTENSION {
                             debug!("Parsing {} as Liquid template", path.display());
                             let tpl = parser.parse_file(&path).map_err(Error::Liquid)?;
+                            let dest = dest.with_extension("");
                             let mut file = self.fs.open(
                                 &dest,
                                 OpenOptions::new()
@@ -383,8 +384,7 @@ mod test {
                         let static_filepath = project_src_dirpath.join(ctx.static_filename);
                         let static_file_content = read_to_string(&static_filepath).unwrap();
                         assert_eq!(static_file_content, ctx.static_file_content);
-                        let templated_filepath =
-                            project_src_dirpath.join(format!("{}.{}", var_value, LIQUID_EXTENSION));
+                        let templated_filepath = project_src_dirpath.join(var_value);
                         let templated_file_content = read_to_string(&templated_filepath).unwrap();
                         assert_eq!(templated_file_content, var_value);
                     },
