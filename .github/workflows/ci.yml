@@ -3,10 +3,10 @@ name: ci
 
 on:
   pull_request:
-    paths-ignore:
-      - .gitignore
-      - LICENSE
-      - "*.md"
+    paths:
+      - .github/workflows/ci.yml
+      - "Cargo.*"
+      - "**.rs"
 
 jobs:
   commitlint:
@@ -19,24 +19,57 @@ jobs:
 
       - name: Setup Node
         uses: actions/setup-node@v3
-
-      - name: Get npm cache directory
-        id: npm-cache-dir
-        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - name: Restore npm cache
-        uses: actions/cache@v3
         with:
-          path: ${{ steps.npm-cache-dir.outputs.dir }}
-          key: ${{ runner.os }}-npm
+          node-version: 16
+          cache: npm
 
-      - name: Install dependencies
+      - name: Run npm install
         run: npm install
 
       - name: Run commitlint
         run: node node_modules/@commitlint/cli/cli.js --from=origin/main
 
+  build:
+    strategy:
+      matrix:
+        target:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: x86_64-apple-darwin
+            os: macos-latest
+    name: build (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target.name }}
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
+
+      - name: Run cross build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target.name }}
+
   pre-commit:
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -45,7 +78,33 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          version: "3.9"
+          python-version: "3.9"
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: x86_64-unknown-linux-gnu-cargo-${{ hashFiles('Cargo.lock') }}-debug
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.0
+
+  test:
+    needs: [build]
+    strategy:
+      matrix:
+        target:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: x86_64-apple-darwin
+            os: macos-latest
+    name: test (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -53,36 +112,58 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+          target: ${{ matrix.target.name }}
 
       - name: Restore cargo cache
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
 
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.0
+      - name: Run cross test
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: test
+          args: --target ${{ matrix.target.name }}
 
-  test:
+  scenario:
+    needs: [build]
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        target:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: x86_64-apple-darwin
+            os: macos-latest
+    name: run test scenario (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target.name }}
+
       - name: Restore cargo cache
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
 
-      - name: Run tests
-        run: cargo test --all
+      - name: Run scenario
+        env:
+          PROJECT_DIR: ~/test
+        run: |
+          cross run --target ${{ matrix.target.name }} -- -vvv new -d description=test -d owner=test -d repository-url=https://github.com/leroyguillaume/test rs-simple test $PROJECT_DIR
