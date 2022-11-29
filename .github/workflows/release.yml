@@ -66,8 +66,10 @@ jobs:
       - name: Restore cargo cache
         uses: actions/cache@v3
         with:
-          path: ~/.cargo
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-get
+          path: |
+            ~/.cargo
+            target
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-release
 
       - name: Install cargo-get
         run: cargo install cargo-get
@@ -89,23 +91,24 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v3
         with:
-          path: ~/Downloads
+          path: /tmp
 
       - name: Rename binaries
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
-          mv ~/Downloads/projectctl-x86_64-unknown-linux-gnu/projectctl ~/Downloads/projectctl-$VERSION-linux-x64
-          mv ~/Downloads/projectctl-aarch64-unknown-linux-gnu/projectctl ~/Downloads/projectctl-$VERSION-linux-aarch64
-          mv ~/Downloads/projectctl-x86_64-apple-darwin/projectctl ~/Downloads/projectctl-$VERSION-macos-x64
+          mv /tmp/projectctl-x86_64-unknown-linux-gnu/projectctl /tmp/projectctl-$VERSION-linux-x64
+          mv /tmp/projectctl-aarch64-unknown-linux-gnu/projectctl /tmp/projectctl-$VERSION-linux-aarch64
+          mv /tmp/projectctl-x86_64-apple-darwin/projectctl /tmp/projectctl-$VERSION-macos-x64
 
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
+          fail_on_unmatched_files: true
           files: |
-            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-linux-x64
-            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-linux-aarch64
-            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-macos-x64
+            /tmp/projectctl-${{ steps.metadata.outputs.version }}-linux-x64
+            /tmp/projectctl-${{ steps.metadata.outputs.version }}-linux-aarch64
+            /tmp/projectctl-${{ steps.metadata.outputs.version }}-macos-x64
 
       - name: Run cargo publish
         env:
