@@ -7,13 +7,18 @@ CLI tool to manage project.
 ## Getting started
 
 - Install from binary
+
+*Sorry for Mac M1/M2 users, I don't have it so I can't build on this architecture because it's not available on GitHub Actions.*
+
 ```bash
+VERSION=0.1.0
+
 # Linux x64
-curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/0.1.0/projectctl-0.1.0-linux-x64
+curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-x64
 # Linux aarch64
-curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/0.1.0/projectctl-0.1.0-linux-aarch64
+curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-aarch64
 # MacOS x64
-curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/0.1.0/projectctl-0.1.0-macos-x64
+curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-macos-x64
 
 sudo chmod +x /usr/local/bin/projectctl
 ```

@@ -1,0 +1,111 @@
+---
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: x86_64-apple-darwin
+            os: macos-latest
+    name: build (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target.name }}
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-release
+
+      - name: Run cross build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target.name }} --release
+
+      - name: Upload binary
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v3
+        with:
+          name: projectctl-${{ matrix.target.name }}
+          path: target/${{ matrix.target.name }}/release/projectctl
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-get
+
+      - name: Install cargo-get
+        run: cargo install cargo-get
+
+      - name: Get project metadata
+        id: metadata
+        run: echo "version=$(cargo get version)" >> $GITHUB_OUTPUT
+
+      - name: Check version matches tag
+        env:
+          VERSION: ${{ steps.metadata.version }}
+        run: '[[ v$VERSION == $GITHUB_REF ]]'
+
+      - name: Check README is up-to-date
+        env:
+          VERSION: ${{ steps.metadata.version }}
+        run: grep "^VERSION=$VERSION" README.md
+
+      - name: Download binaries
+        uses: actions/download-artifact@v3
+
+      - name: Rename binaries
+        env:
+          VERSION: ${{ steps.metadata.version }}
+        run: |
+          mv projectctl-x86_64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-x64
+          mv projectctl-aarch64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-aarch64
+          mv projectctl-x86_64-apple-darwin/projectctl projectctl-$VERSION-macos-x64
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            projectctl-${{ steps.metadata.version }}-linux-x64
+            projectctl-${{ steps.metadata.version }}-linux-aarch64
+            projectctl-${{ steps.metadata.version }}-macos-x64
+
+      - name: Run cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
