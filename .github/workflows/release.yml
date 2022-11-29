@@ -79,7 +79,7 @@ jobs:
       - name: Check version matches tag
         env:
           VERSION: ${{ steps.metadata.version }}
-        run: '[[ v$VERSION == $GITHUB_REF ]]'
+        run: '[[ v$VERSION == $GITHUB_REF_NAME ]]'
 
       - name: Check README is up-to-date
         env:
