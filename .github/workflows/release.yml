@@ -78,12 +78,12 @@ jobs:
 
       - name: Check version matches tag
         env:
-          VERSION: ${{ steps.metadata.version }}
+          VERSION: ${{ steps.metadata.outputs.version }}
         run: '[[ v$VERSION == $GITHUB_REF_NAME ]]'
 
       - name: Check README is up-to-date
         env:
-          VERSION: ${{ steps.metadata.version }}
+          VERSION: ${{ steps.metadata.outputs.version }}
         run: grep "^VERSION=$VERSION" README.md
 
       - name: Download binaries
@@ -91,7 +91,7 @@ jobs:
 
       - name: Rename binaries
         env:
-          VERSION: ${{ steps.metadata.version }}
+          VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           mv projectctl-x86_64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-x64
           mv projectctl-aarch64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-aarch64
