@@ -69,7 +69,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-release
+          key: x86_64-unknown-linux-gnu-cargo-${{ hashFiles('Cargo.lock') }}-release
 
       - name: Install cargo-get
         run: cargo install cargo-get
