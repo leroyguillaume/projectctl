@@ -88,22 +88,24 @@ jobs:
 
       - name: Download binaries
         uses: actions/download-artifact@v3
+        with:
+          path: ~/Downloads
 
       - name: Rename binaries
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
-          mv projectctl-x86_64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-x64
-          mv projectctl-aarch64-unknown-linux-gnu/projectctl projectctl-$VERSION-linux-aarch64
-          mv projectctl-x86_64-apple-darwin/projectctl projectctl-$VERSION-macos-x64
+          mv ~/Downloads/projectctl-x86_64-unknown-linux-gnu/projectctl ~/Downloads/projectctl-$VERSION-linux-x64
+          mv ~/Downloads/projectctl-aarch64-unknown-linux-gnu/projectctl ~/Downloads/projectctl-$VERSION-linux-aarch64
+          mv ~/Downloads/projectctl-x86_64-apple-darwin/projectctl ~/Downloads/projectctl-$VERSION-macos-x64
 
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            projectctl-${{ steps.metadata.version }}-linux-x64
-            projectctl-${{ steps.metadata.version }}-linux-aarch64
-            projectctl-${{ steps.metadata.version }}-macos-x64
+            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-linux-x64
+            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-linux-aarch64
+            ~/Downloads/projectctl-${{ steps.metadata.outputs.version }}-macos-x64
 
       - name: Run cargo publish
         env:
