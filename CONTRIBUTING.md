@@ -8,7 +8,7 @@ projectctl is licenced under the MIT license. Please see the [LICENSE](LICENSE) 
 
 ## Pull Requests
 
-To make changes to projectctl, please send in pull requests on GitHub to the `main`
+To make changes to projectctl, please send in pull requests on GitHub to the `develop`
 branch. We'll review them and either merge or request changes. GitHub Actions tests
 everything as well, so you may get feedback from it too.
 
