@@ -1,9 +1,11 @@
 use std::path::Path;
 
-use git2::{Error, Repository};
+use git2::Repository;
 use log::debug;
 #[cfg(test)]
 use stub_trait::stub;
+
+use crate::err::Error;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Reference {
@@ -19,6 +21,8 @@ pub trait Git {
         reference: Option<Reference>,
         dest: &Path,
     ) -> Result<Repository, Error>;
+
+    fn init(&self, path: &Path) -> Result<Repository, Error>;
 }
 
 pub struct DefaultGit;
@@ -31,16 +35,21 @@ impl Git for DefaultGit {
         dest: &Path,
     ) -> Result<Repository, Error> {
         debug!("Cloning {} into {}", url, dest.display());
-        let repo = Repository::clone(url, dest)?;
+        let repo = Repository::clone(url, dest).map_err(Error::Git)?;
         if let Some(reference) = reference {
             let reference = match reference {
                 Reference::Branch(branch) => format!("refs/remotes/origin/{}", branch),
                 Reference::Tag(tag) => format!("refs/tags/{}", tag),
             };
             debug!("Setting HEAD to {}", reference);
-            repo.set_head(&reference)?;
+            repo.set_head(&reference).map_err(Error::Git)?;
         }
         Ok(repo)
+    }
+
+    fn init(&self, path: &Path) -> Result<Repository, Error> {
+        debug!("Initializing git repository into {}", path.display());
+        Repository::init(path).map_err(Error::Git)
     }
 }
 
@@ -180,6 +189,17 @@ mod test {
                     .checkout_repository(url, reference, &dest)
                     .unwrap();
                 assert_fn(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
+            }
+        }
+
+        mod init {
+            use super::*;
+
+            #[test]
+            fn repo() {
+                let path = tempdir().unwrap().into_path();
+                let repo = DefaultGit.init(&path).unwrap();
+                assert!(repo.is_empty().unwrap());
             }
         }
     }

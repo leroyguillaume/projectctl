@@ -79,7 +79,6 @@ impl Command for NewCommand {
         let res = self
             .git
             .checkout_repository(&self.args.git, git_ref, &tpl_repo_path)
-            .map_err(Error::Git)
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
@@ -91,7 +90,11 @@ impl Command for NewCommand {
                 }
             });
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
-        if res.is_err() {
+        if res.is_ok() {
+            if let Err(err) = self.git.init(&dest) {
+                warn!("{}", err);
+            }
+        } else {
             Self::delete_dir(&dest, self.fs.as_ref());
         }
         res
@@ -157,9 +160,9 @@ mod test {
         mod run {
             use super::*;
 
-            type CheckoutRepositoryFn =
-                dyn Fn(Repository) -> std::result::Result<Repository, git2::Error>;
+            type CheckoutRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
             type CWDFn = dyn Fn() -> io::Result<()>;
+            type InitRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
             type RenderRecursivelyFn = dyn Fn() -> Result;
             type TempdirFn = dyn Fn() -> io::Result<()>;
 
@@ -179,6 +182,7 @@ mod test {
                 checkout_repo_fn: Box<CheckoutRepositoryFn>,
                 cwd_fn: Box<CWDFn>,
                 git_ref: Option<Reference>,
+                init_repo_fn: Box<InitRepositoryFn>,
                 render_recursively_fn: Box<RenderRecursivelyFn>,
                 tempdir_fn: Box<TempdirFn>,
             }
@@ -197,9 +201,10 @@ mod test {
                                     tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
-                                checkout_repo_fn: Box::new(Ok),
+                                checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
+                                init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
@@ -228,9 +233,10 @@ mod test {
                                     tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
-                                checkout_repo_fn: Box::new(Ok),
+                                checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
+                                init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(move || {
                                     Err(io::Error::from(io::ErrorKind::PermissionDenied))
@@ -258,7 +264,7 @@ mod test {
                                     tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
-                                checkout_repo_fn: Box::new(move |_| {
+                                checkout_repo_fn: Box::new(|| {
                                     Err(git2::Error::new(
                                         git2::ErrorCode::Ambiguous,
                                         git2::ErrorClass::Callback,
@@ -267,6 +273,7 @@ mod test {
                                 }),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
+                                init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
@@ -296,9 +303,10 @@ mod test {
                                     tpl: expected_tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
-                                checkout_repo_fn: Box::new(Ok),
+                                checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
+                                init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
@@ -326,9 +334,10 @@ mod test {
                                     tpl: ctx.tpl.into(),
                                     ..NewCommandArguments::default_for_test()
                                 },
-                                checkout_repo_fn: Box::new(Ok),
+                                checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
                                 git_ref: None,
+                                init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(move || {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 }),
@@ -358,9 +367,39 @@ mod test {
                                 tpl: ctx.tpl.into(),
                                 ..NewCommandArguments::default_for_test()
                             },
-                            checkout_repo_fn: Box::new(Ok),
+                            checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
                             git_ref: None,
+                            init_repo_fn: Box::new(|| Ok(())),
+                            render_recursively_fn: Box::new(|| Ok(())),
+                            tempdir_fn: Box::new(|| Ok(())),
+                        },
+                        dest: ctx.cwd.join(name),
+                    }
+                });
+            }
+
+            #[test]
+            fn ok_when_init_repo_failed() {
+                ok(move |ctx| {
+                    let name = "test";
+                    Data {
+                        params: Parameters {
+                            args: NewCommandArguments {
+                                name: name.into(),
+                                tpl: ctx.tpl.into(),
+                                ..NewCommandArguments::default_for_test()
+                            },
+                            checkout_repo_fn: Box::new(|| Ok(())),
+                            cwd_fn: Box::new(|| Ok(())),
+                            git_ref: None,
+                            init_repo_fn: Box::new(|| {
+                                Err(git2::Error::new(
+                                    git2::ErrorCode::Ambiguous,
+                                    git2::ErrorClass::Callback,
+                                    "error",
+                                ))
+                            }),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
@@ -384,9 +423,10 @@ mod test {
                                 tpl: ctx.tpl.into(),
                                 ..NewCommandArguments::default_for_test()
                             },
-                            checkout_repo_fn: Box::new(Ok),
+                            checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Branch(branch.into())),
+                            init_repo_fn: Box::new(|| Ok(())),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
@@ -408,9 +448,10 @@ mod test {
                                 tpl: ctx.tpl.into(),
                                 ..NewCommandArguments::default_for_test()
                             },
-                            checkout_repo_fn: Box::new(Ok),
+                            checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Tag(tag.into())),
+                            init_repo_fn: Box::new(|| Ok(())),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
@@ -463,16 +504,28 @@ mod test {
                         }
                     })
                     .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO));
-                let git = StubGit::new().with_stub_of_checkout_repository({
-                    let expected_url = data.params.args.git.clone();
-                    let tpl_repo_path = tpl_repo_path.clone();
-                    move |_, url, reference, dest| {
-                        assert_eq!(url, expected_url);
-                        assert_eq!(reference, data.params.git_ref);
-                        assert_eq!(dest, tpl_repo_path);
-                        (data.params.checkout_repo_fn)(Repository::init(&tpl_repo_path).unwrap())
-                    }
-                });
+                let git = StubGit::new()
+                    .with_stub_of_checkout_repository({
+                        let expected_url = data.params.args.git.clone();
+                        let tpl_repo_path = tpl_repo_path.clone();
+                        move |_, url, reference, dest| {
+                            assert_eq!(url, expected_url);
+                            assert_eq!(reference, data.params.git_ref);
+                            assert_eq!(dest, tpl_repo_path);
+                            (data.params.checkout_repo_fn)()
+                                .map(|_| Repository::init(&tpl_repo_path).unwrap())
+                                .map_err(Error::Git)
+                        }
+                    })
+                    .with_stub_of_init({
+                        let expected_dest = data.dest.clone();
+                        move |_, path| {
+                            assert_eq!(path, expected_dest);
+                            (data.params.init_repo_fn)()
+                                .map(|_| Repository::init(path).unwrap())
+                                .map_err(Error::Git)
+                        }
+                    });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let expected_dest = data.dest.clone();
                     let mut expected_vars = data.params.args.vars.clone();
