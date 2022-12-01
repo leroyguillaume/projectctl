@@ -676,6 +676,7 @@ dependencies = [
  "log",
  "openssl",
  "predicates",
+ "regex",
  "stub_trait",
  "tempfile",
 ]
