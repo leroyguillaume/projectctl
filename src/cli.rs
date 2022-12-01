@@ -6,10 +6,13 @@ use std::{
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use log::LevelFilter;
+use regex::Regex;
 
 use crate::cmd::{new::NewCommand, CommandKind};
 
 pub const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
+
+const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -115,9 +118,8 @@ pub struct NewCommandArguments {
         help = "Define custom variable",
         long = "set",
         name = "KEY=VALUE",
-        number_of_values = 1,
         short = 'd',
-        value_parser = parse_key_val,
+        value_parser = parse_key_value,
     )]
     pub vars: Vec<(String, String)>,
 }
@@ -144,15 +146,18 @@ impl Error for InvalidVariableError {}
 
 impl Display for InvalidVariableError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "`{}` does not contain `=`", self.0)
+        write!(f, "`{}` does not match `{}`", self.0, KEY_VALUE_PATTERN)
     }
 }
 
-fn parse_key_val(s: &str) -> Result<(String, String), InvalidVariableError> {
-    if let Some((var, value)) = s.split_once('=') {
-        Ok((var.into(), value.into()))
+fn parse_key_value(key_value: &str) -> Result<(String, String), InvalidVariableError> {
+    let regex = Regex::new(KEY_VALUE_PATTERN).unwrap();
+    if let Some(captures) = regex.captures(key_value) {
+        let key = captures.get(1).unwrap().as_str();
+        let value = captures.get(2).unwrap().as_str();
+        Ok((key.trim().into(), value.trim().into()))
     } else {
-        Err(InvalidVariableError(s.into()))
+        Err(InvalidVariableError(key_value.into()))
     }
 }
 
@@ -215,6 +220,54 @@ mod test {
             test!(info, 0, 1, LevelFilter::Info);
             test!(debug, 0, 2, LevelFilter::Debug);
             test!(trace, 0, 3, LevelFilter::Trace);
+        }
+    }
+
+    mod parse_key_value {
+        use super::*;
+
+        #[test]
+        fn err_if_equal_is_missing() {
+            parse_key_value("key").unwrap_err();
+        }
+
+        #[test]
+        fn err_if_key_starts_with_digit() {
+            parse_key_value("0var=value").unwrap_err();
+        }
+
+        #[test]
+        fn err_if_key_starts_with_dash() {
+            parse_key_value("-=value").unwrap_err();
+        }
+
+        #[test]
+        fn ok_when_key_contains_dash_and_underscore() {
+            ok("v_-0");
+        }
+
+        #[test]
+        fn ok_when_key_is_single_underscore() {
+            ok("_");
+        }
+
+        #[test]
+        fn ok_when_key_is_single_letter() {
+            ok("a");
+        }
+
+        #[test]
+        fn ok_when_key_is_word() {
+            ok("var");
+        }
+
+        #[inline]
+        fn ok(expected_key: &str) {
+            let expected_value = "value";
+            let key_value = format!(" {} = {} ", expected_key, expected_value);
+            let (key, value) = parse_key_value(&key_value).unwrap();
+            assert_eq!(key, expected_key);
+            assert_eq!(value, expected_value);
         }
     }
 }
