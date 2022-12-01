@@ -57,13 +57,12 @@ By default, [leroyguillaume/projectctl-templates](https://github.com/leroyguilla
 projectctl injects some variables:
 - `name` that has for value the project name
 
-You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `-d` option (as you can see in following examples).
+You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `-d key=value` option (as you can see in following examples).
 
 Example:
 ```bash
 projectctl new \
-    -d "description=Awesome new project" \
-    -d owner=Me \
-    -d "repository-url=https://github.com/my-git-user/my-project-name" \
-    rs-simple my-project-name
+    -d "git_user_name=John Doe" \
+    -d "git_user_email=john.doe@local" \
+    rs-lib my-project-name
 ```

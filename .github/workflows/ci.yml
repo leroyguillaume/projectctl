@@ -146,4 +146,4 @@ jobs:
         env:
           PROJECT_DIR: ~/test
         run: |
-          cross run --target ${{ matrix.target.name }} -- -vvv new -d description=test -d owner=test -d repository-url=https://github.com/leroyguillaume/test rs-simple test $PROJECT_DIR
+          cross run --target ${{ matrix.target.name }} -- -vvv new -d git_user_name=test -d "git_user_email=test@local" rs-lib test $PROJECT_DIR
