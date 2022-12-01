@@ -6,6 +6,8 @@ license = "MIT"
 description = "CLI tool to manage project"
 authors = ["Guillaume Leroy <pro.guillaume.leroy>"]
 repository = "https://github.com/leroyguillaume/projectctl"
+categories = ["command-line-utilities"]
+keywords = ["templating", "project", "lifecycle"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
