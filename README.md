@@ -56,13 +56,13 @@ By default, [leroyguillaume/projectctl-templates](https://github.com/leroyguilla
 
 projectctl injects some variables:
 - `name` that has for value the project name
+- `description` that has for value the project description (can be set with `-D` option, unset by default)
+- `git_user_name` that has for value the git username (can be undefined if it is not set in default git configuration)
+- `git_user_email` that has for value the email of the git user (can be undefined if it is not set in default git configuration)
 
-You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `-d key=value` option (as you can see in following examples).
+You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `-d key=value` option.
 
 Example:
 ```bash
-projectctl new \
-    -d "git_user_name=John Doe" \
-    -d "git_user_email=john.doe@local" \
-    rs-lib my-project-name
+projectctl new rs-lib my-project-name
 ```
