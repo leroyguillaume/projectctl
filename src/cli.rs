@@ -82,6 +82,14 @@ pub enum CommandArgument {
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
 pub struct NewCommandArguments {
+    #[clap(
+        help = "Description of the project to create",
+        long = "description",
+        name = "DESCRIPTION",
+        short = 'D'
+    )]
+    pub desc: Option<String>,
+
     #[clap(help = "Destination directory", index = 3, name = "DIR")]
     pub dest: Option<PathBuf>,
 
@@ -128,13 +136,14 @@ pub struct NewCommandArguments {
 impl NewCommandArguments {
     pub fn default_for_test() -> Self {
         Self {
+            desc: None,
             dest: None,
             git: DEFAULT_TPL_GIT_REPO_URL.into(),
             git_branch: None,
             git_tag: None,
             name: String::from("myproject"),
             tpl: String::from("mytemplate"),
-            vars: vec![("myvar".into(), "myvalue".into())],
+            vars: vec![],
         }
     }
 }

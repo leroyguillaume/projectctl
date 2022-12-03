@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use git2::{build::CheckoutBuilder, Repository};
-use log::{debug, trace};
+use git2::{build::CheckoutBuilder, Config, Repository};
+use log::{debug, trace, warn};
 #[cfg(test)]
 use stub_trait::stub;
 
@@ -22,10 +22,26 @@ pub trait Git {
         dest: &Path,
     ) -> Result<Repository, Error>;
 
+    fn default_config_value(&self, key: &str) -> Result<String, Error>;
+
     fn init(&self, path: &Path) -> Result<Repository, Error>;
 }
 
-pub struct DefaultGit;
+pub struct DefaultGit {
+    cfg: Config,
+}
+
+impl DefaultGit {
+    pub fn new() -> Self {
+        debug!("Reading git default configuration");
+        Self {
+            cfg: Config::open_default().unwrap_or_else(|err| {
+                warn!("{}", Error::Git(err));
+                Config::new().unwrap()
+            }),
+        }
+    }
+}
 
 impl Git for DefaultGit {
     fn checkout_repository(
@@ -50,6 +66,11 @@ impl Git for DefaultGit {
         Ok(repo)
     }
 
+    fn default_config_value(&self, key: &str) -> Result<String, Error> {
+        debug!("Reading `{}` from git default configuration", key);
+        self.cfg.get_string(key).map_err(Error::Git)
+    }
+
     fn init(&self, path: &Path) -> Result<Repository, Error> {
         debug!("Initializing git repository into {}", path.display());
         Repository::init(path).map_err(Error::Git)
@@ -68,6 +89,15 @@ mod test {
     mod default_git {
         use super::*;
 
+        mod new {
+            use super::*;
+
+            #[test]
+            fn git() {
+                DefaultGit::new();
+            }
+        }
+
         mod checkout_repository {
             use super::*;
 
@@ -80,7 +110,7 @@ mod test {
             }
 
             #[test]
-            fn repo_when_ref_is_unset() {
+            fn ok_when_ref_is_unset() {
                 test(
                     |_| None,
                     |ctx, commit_id| {
@@ -90,7 +120,7 @@ mod test {
             }
 
             #[test]
-            fn repo_when_ref_is_branch() {
+            fn ok_when_ref_is_branch() {
                 test(
                     |ctx| Some(Reference::Branch(ctx.branch.into())),
                     |ctx, commit_id| {
@@ -100,7 +130,7 @@ mod test {
             }
 
             #[test]
-            fn repo_when_ref_is_tag() {
+            fn ok_when_ref_is_tag() {
                 test(
                     |ctx| Some(Reference::Tag(ctx.tag.into())),
                     |ctx, commit_id| {
@@ -188,9 +218,10 @@ mod test {
                 };
                 let reference = data_from_fn(&ctx);
                 let url = remote_dirpath.to_str().unwrap();
-                let repo = DefaultGit
-                    .checkout_repository(url, reference, &dest)
-                    .unwrap();
+                let git = DefaultGit {
+                    cfg: Config::open_default().unwrap(),
+                };
+                let repo = git.checkout_repository(url, reference, &dest).unwrap();
                 assert_fn(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
             }
         }
@@ -199,9 +230,12 @@ mod test {
             use super::*;
 
             #[test]
-            fn repo() {
+            fn ok() {
                 let path = tempdir().unwrap().into_path();
-                let repo = DefaultGit.init(&path).unwrap();
+                let git = DefaultGit {
+                    cfg: Config::open_default().unwrap(),
+                };
+                let repo = git.init(&path).unwrap();
                 assert!(repo.is_empty().unwrap());
             }
         }

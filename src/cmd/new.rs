@@ -10,12 +10,18 @@ use crate::{
     err::Error,
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
-    renderer::{LiquidRenderer, Renderer},
+    renderer::{LiquidRenderer, Renderer, Vars},
 };
 
 use super::{Command, CommandKind, Result};
 
+const DESCRIPTION_VAR_KEY: &str = "description";
+const GIT_USER_EMAIL_VAR_KEY: &str = "git_user_email";
+const GIT_USER_NAME_VAR_KEY: &str = "git_user_name";
 const NAME_VAR_NAME: &str = "name";
+
+const GIT_USER_EMAIL_CONFIG_KEY: &str = "user.email";
+const GIT_USER_NAME_CONFIG_KEY: &str = "user.name";
 
 pub struct NewCommand {
     args: NewCommandArguments,
@@ -29,15 +35,63 @@ impl NewCommand {
         Self {
             args,
             fs: Box::new(DefaultFileSystem),
-            git: Box::new(DefaultGit),
+            git: Box::new(DefaultGit::new()),
             renderer: Box::new(LiquidRenderer::new()),
         }
+    }
+
+    #[inline]
+    fn create_vars(
+        name: String,
+        desc: Option<String>,
+        cli_vars: Vec<(String, String)>,
+        git: &dyn Git,
+    ) -> Vars {
+        let mut vars = Vars::new();
+        Self::inject_var(NAME_VAR_NAME.into(), name, &mut vars);
+        if let Some(desc) = desc {
+            Self::inject_var(DESCRIPTION_VAR_KEY.into(), desc, &mut vars);
+        }
+        Self::inject_git_var(
+            GIT_USER_NAME_VAR_KEY,
+            GIT_USER_NAME_CONFIG_KEY,
+            &mut vars,
+            git,
+        );
+        Self::inject_git_var(
+            GIT_USER_EMAIL_VAR_KEY,
+            GIT_USER_EMAIL_CONFIG_KEY,
+            &mut vars,
+            git,
+        );
+        for (key, value) in cli_vars {
+            Self::inject_var(key, value, &mut vars);
+        }
+        vars
     }
 
     #[inline]
     fn delete_dir(path: &Path, fs: &dyn FileSystem) {
         if let Err(err) = fs.delete_dir(path) {
             warn!("Unable to delete {}: {}", path.display(), err);
+        }
+    }
+
+    #[inline]
+    fn inject_git_var(key: &str, git_cfg_key: &str, vars: &mut Vars, git: &dyn Git) {
+        match git.default_config_value(git_cfg_key) {
+            Ok(value) => Self::inject_var(key.into(), value, vars),
+            Err(err) => warn!("{}", err),
+        }
+    }
+
+    #[inline]
+    fn inject_var(key: String, value: String, vars: &mut Vars) {
+        if let Some(prev_value) = vars.insert(key.clone(), value.clone()) {
+            warn!(
+                "Variable `{}` is overriden (`{}` over `{}`)",
+                key, value, prev_value
+            );
         }
     }
 }
@@ -82,8 +136,12 @@ impl Command for NewCommand {
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
-                    let mut vars = self.args.vars;
-                    vars.push((NAME_VAR_NAME.into(), self.args.name));
+                    let vars = Self::create_vars(
+                        self.args.name,
+                        self.args.desc,
+                        self.args.vars,
+                        self.git.as_ref(),
+                    );
                     self.renderer.render_recursively(&tpl_dirpath, &dest, vars)
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
@@ -162,12 +220,15 @@ mod test {
 
             type CheckoutRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
             type CWDFn = dyn Fn() -> io::Result<()>;
+            type DefaultGitConfigValueFn = dyn Fn() -> std::result::Result<(), git2::Error>;
             type InitRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
             type RenderRecursivelyFn = dyn Fn() -> Result;
             type TempdirFn = dyn Fn() -> io::Result<()>;
 
             struct Context<'a> {
                 cwd: &'a Path,
+                git_email: &'a str,
+                git_username: &'a str,
                 tpl: &'a str,
                 tpl_repo_path: &'a Path,
             }
@@ -175,12 +236,14 @@ mod test {
             struct Data {
                 dest: PathBuf,
                 params: Parameters,
+                vars: Vars,
             }
 
             struct Parameters {
                 args: NewCommandArguments,
                 checkout_repo_fn: Box<CheckoutRepositoryFn>,
                 cwd_fn: Box<CWDFn>,
+                default_git_cfg_value_fn: Box<DefaultGitConfigValueFn>,
                 git_ref: Option<Reference>,
                 init_repo_fn: Box<InitRepositoryFn>,
                 render_recursively_fn: Box<RenderRecursivelyFn>,
@@ -203,12 +266,18 @@ mod test {
                                 },
                                 checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
+                                default_git_cfg_value_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest,
+                            vars: Vars::from_iter(vec![
+                                (NAME_VAR_NAME.into(), name.into()),
+                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            ]),
                         }
                     },
                     |_, dest, res| match res.unwrap_err() {
@@ -235,6 +304,7 @@ mod test {
                                 },
                                 checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
+                                default_git_cfg_value_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
@@ -243,6 +313,11 @@ mod test {
                                 }),
                             },
                             dest: ctx.cwd.join(name),
+                            vars: Vars::from_iter(vec![
+                                (NAME_VAR_NAME.into(), name.into()),
+                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            ]),
                         }
                     },
                     |_, dest, res| match res.unwrap_err() {
@@ -272,12 +347,18 @@ mod test {
                                     ))
                                 }),
                                 cwd_fn: Box::new(|| Ok(())),
+                                default_git_cfg_value_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
+                            vars: Vars::from_iter(vec![
+                                (NAME_VAR_NAME.into(), name.into()),
+                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            ]),
                         }
                     },
                     |ctx, dest, res| match res.unwrap_err() {
@@ -305,12 +386,18 @@ mod test {
                                 },
                                 checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
+                                default_git_cfg_value_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(|| Ok(())),
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
+                            vars: Vars::from_iter(vec![
+                                (NAME_VAR_NAME.into(), name.into()),
+                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            ]),
                         }
                     },
                     |_, _, res| match res.unwrap_err() {
@@ -336,6 +423,7 @@ mod test {
                                 },
                                 checkout_repo_fn: Box::new(|| Ok(())),
                                 cwd_fn: Box::new(|| Ok(())),
+                                default_git_cfg_value_fn: Box::new(|| Ok(())),
                                 git_ref: None,
                                 init_repo_fn: Box::new(|| Ok(())),
                                 render_recursively_fn: Box::new(move || {
@@ -344,6 +432,11 @@ mod test {
                                 tempdir_fn: Box::new(|| Ok(())),
                             },
                             dest: ctx.cwd.join(name),
+                            vars: Vars::from_iter(vec![
+                                (NAME_VAR_NAME.into(), name.into()),
+                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            ]),
                         }
                     },
                     |ctx, dest, res| match res.unwrap_err() {
@@ -369,12 +462,49 @@ mod test {
                             },
                             checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
+                            default_git_cfg_value_fn: Box::new(|| Ok(())),
                             git_ref: None,
                             init_repo_fn: Box::new(|| Ok(())),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest: ctx.cwd.join(name),
+                        vars: Vars::from_iter(vec![
+                            (NAME_VAR_NAME.into(), name.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                        ]),
+                    }
+                });
+            }
+
+            #[test]
+            fn ok_when_default_git_config_value_failed() {
+                ok(move |ctx| {
+                    let name = "test";
+                    Data {
+                        params: Parameters {
+                            args: NewCommandArguments {
+                                name: name.into(),
+                                tpl: ctx.tpl.into(),
+                                ..NewCommandArguments::default_for_test()
+                            },
+                            checkout_repo_fn: Box::new(|| Ok(())),
+                            cwd_fn: Box::new(|| Ok(())),
+                            default_git_cfg_value_fn: Box::new(|| {
+                                Err(git2::Error::new(
+                                    git2::ErrorCode::Ambiguous,
+                                    git2::ErrorClass::Callback,
+                                    "error",
+                                ))
+                            }),
+                            git_ref: None,
+                            init_repo_fn: Box::new(|| Ok(())),
+                            render_recursively_fn: Box::new(|| Ok(())),
+                            tempdir_fn: Box::new(|| Ok(())),
+                        },
+                        dest: ctx.cwd.join(name),
+                        vars: Vars::from_iter(vec![(NAME_VAR_NAME.into(), name.into())]),
                     }
                 });
             }
@@ -392,6 +522,7 @@ mod test {
                             },
                             checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
+                            default_git_cfg_value_fn: Box::new(|| Ok(())),
                             git_ref: None,
                             init_repo_fn: Box::new(|| {
                                 Err(git2::Error::new(
@@ -404,6 +535,11 @@ mod test {
                             tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest: ctx.cwd.join(name),
+                        vars: Vars::from_iter(vec![
+                            (NAME_VAR_NAME.into(), name.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                        ]),
                     }
                 });
             }
@@ -411,26 +547,44 @@ mod test {
             #[test]
             fn ok_when_custom_args() {
                 ok(move |ctx| {
+                    let name = "test";
+                    let desc = "test project";
                     let dest = tempdir().unwrap().into_path().join("test");
                     let branch = "develop";
+                    let var_key = "myvar";
+                    let var_value = "myvalue";
+                    let git_email = format!("{}2", ctx.git_email);
                     Data {
                         params: Parameters {
                             args: NewCommandArguments {
+                                desc: Some(desc.into()),
                                 dest: Some(dest.clone()),
                                 git: format!("{}2", DEFAULT_TPL_GIT_REPO_URL),
                                 git_branch: Some(branch.into()),
                                 git_tag: None,
+                                name: name.into(),
                                 tpl: ctx.tpl.into(),
-                                ..NewCommandArguments::default_for_test()
+                                vars: vec![
+                                    (var_key.into(), var_value.into()),
+                                    (GIT_USER_EMAIL_VAR_KEY.into(), git_email.clone()),
+                                ],
                             },
                             checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
+                            default_git_cfg_value_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Branch(branch.into())),
                             init_repo_fn: Box::new(|| Ok(())),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest,
+                        vars: Vars::from_iter(vec![
+                            (NAME_VAR_NAME.into(), name.into()),
+                            (DESCRIPTION_VAR_KEY.into(), desc.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), git_email),
+                            (var_key.into(), var_value.into()),
+                        ]),
                     }
                 });
             }
@@ -450,12 +604,18 @@ mod test {
                             },
                             checkout_repo_fn: Box::new(|| Ok(())),
                             cwd_fn: Box::new(|| Ok(())),
+                            default_git_cfg_value_fn: Box::new(|| Ok(())),
                             git_ref: Some(Reference::Tag(tag.into())),
                             init_repo_fn: Box::new(|| Ok(())),
                             render_recursively_fn: Box::new(|| Ok(())),
                             tempdir_fn: Box::new(|| Ok(())),
                         },
                         dest: ctx.cwd.join(name),
+                        vars: Vars::from_iter(vec![
+                            (NAME_VAR_NAME.into(), name.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                        ]),
                     }
                 });
             }
@@ -474,6 +634,8 @@ mod test {
                 data_from_fn: D,
                 assert_fn: A,
             ) {
+                let git_username = "Test";
+                let git_email = "test@local";
                 let cwd = tempdir().unwrap().into_path();
                 let tpl_repo_path = tempdir().unwrap().into_path();
                 let tpl = "mytemplate";
@@ -481,6 +643,8 @@ mod test {
                 create_dir_all(&expected_tpl_dirpath).unwrap();
                 let ctx = Context {
                     cwd: &cwd,
+                    git_email,
+                    git_username,
                     tpl,
                     tpl_repo_path: &tpl_repo_path,
                 };
@@ -517,6 +681,20 @@ mod test {
                                 .map_err(Error::Git)
                         }
                     })
+                    .with_stub_of_default_config_value(move |i, key| {
+                        let value = if i == 0 {
+                            assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
+                            git_username
+                        } else if i == 1 {
+                            assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
+                            git_email
+                        } else {
+                            panic!("unexpected key `{}`", key);
+                        };
+                        (data.params.default_git_cfg_value_fn)()
+                            .map(|_| value.into())
+                            .map_err(Error::Git)
+                    })
                     .with_stub_of_init({
                         let expected_dest = data.dest.clone();
                         move |_, path| {
@@ -528,8 +706,7 @@ mod test {
                     });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let expected_dest = data.dest.clone();
-                    let mut expected_vars = data.params.args.vars.clone();
-                    expected_vars.push((NAME_VAR_NAME.into(), data.params.args.name.clone()));
+                    let expected_vars = data.vars.clone();
                     move |_, tpl_dirpath, dest, vars| {
                         assert_eq!(tpl_dirpath, expected_tpl_dirpath);
                         assert_eq!(dest, expected_dest);
