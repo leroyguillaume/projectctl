@@ -102,6 +102,11 @@ jobs:
             target
           key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
 
+      - name: Configure git user/email
+        run: |
+          git config --global user.name "$(git log -n 1 --pretty=format:%an)"
+          git config --global user.email "$(git log -n 1 --pretty=format:%ae)"
+
       - name: Run cross test
         uses: actions-rs/cargo@v1
         with:
@@ -115,8 +120,6 @@ jobs:
       matrix:
         target:
           - name: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - name: aarch64-unknown-linux-gnu
             os: ubuntu-latest
           - name: x86_64-apple-darwin
             os: macos-latest
@@ -142,8 +145,13 @@ jobs:
             target
           key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
 
+      - name: Run cargo install
+        run: cargo install --path .
+
       - name: Run scenario
         env:
           PROJECT_DIR: ~/test
         run: |
-          cross run --target ${{ matrix.target.name }} -- -vvv new -d git_user_name=test -d "git_user_email=test@local" rs-lib test $PROJECT_DIR
+          git config --global user.name "$(git log -n 1 --pretty=format:%an)"
+          git config --global user.email "$(git log -n 1 --pretty=format:%ae)"
+          projectctl -vvv new rs-lib test $PROJECT_DIR

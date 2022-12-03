@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, path::Path};
+use std::{collections::HashMap, fs::OpenOptions, path::Path};
 
 use liquid::{
     model::{KString, ScalarCow, Value},
@@ -17,15 +17,11 @@ const GIT_DIRNAME: &str = ".git";
 const LIQUID_EXTENSION: &str = "liquid";
 
 pub type Result = std::result::Result<(), Error>;
+pub type Vars = HashMap<String, String>;
 
 #[cfg_attr(test, stub)]
 pub trait Renderer {
-    fn render_recursively(
-        &self,
-        tpl_dirpath: &Path,
-        dest: &Path,
-        vars: Vec<(String, String)>,
-    ) -> Result;
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result;
 }
 
 pub struct LiquidRenderer {
@@ -91,12 +87,7 @@ impl LiquidRenderer {
 }
 
 impl Renderer for LiquidRenderer {
-    fn render_recursively(
-        &self,
-        tpl_dirpath: &Path,
-        dest: &Path,
-        vars: Vec<(String, String)>,
-    ) -> Result {
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result {
         info!(
             "Rendering files from template `{}`",
             tpl_dirpath.file_name().unwrap().to_string_lossy(),
@@ -104,7 +95,7 @@ impl Renderer for LiquidRenderer {
         if log_enabled!(Level::Debug) {
             let s = vars
                 .iter()
-                .map(|(key, value)| format!("{}: {}", key, value))
+                .map(|(key, value)| format!("{}: `{}`", key, value))
                 .reduce(|accum, item| format!("{}, {}", accum, item))
                 .unwrap_or_default();
             debug!("Variables: {{{}}}", s);
@@ -157,7 +148,7 @@ mod test {
                 project_src_rel_dirpath: PathBuf,
                 read_dir_fn: Box<ReadDirFn>,
                 templated_file_content: String,
-                vars: Vec<(String, String)>,
+                vars: Vars,
             }
 
             #[test]
@@ -175,7 +166,7 @@ mod test {
                             Err(io::Error::from(io::ErrorKind::PermissionDenied))
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::IO(_) => (),
@@ -201,7 +192,7 @@ mod test {
                             ))
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::IO(_) => (),
@@ -227,7 +218,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::IO(_) => (),
@@ -251,7 +242,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid(_) => {}
@@ -275,7 +266,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid(_) => {}
@@ -299,7 +290,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: "{{ | min }}".into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid(_) => {}
@@ -323,7 +314,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid(_) => {}
@@ -349,7 +340,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), "test".into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), "test".into())]),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::IO(_) => (),
@@ -375,7 +366,7 @@ mod test {
                             read_dir(path).map(|read_dir| Box::new(read_dir) as Box<DirEntries>)
                         }),
                         templated_file_content: ctx.static_file_content.into(),
-                        vars: vec![(ctx.var_name.into(), var_value.into())],
+                        vars: Vars::from_iter(vec![(ctx.var_name.into(), var_value.into())]),
                     },
                     |ctx, res| {
                         res.unwrap();
