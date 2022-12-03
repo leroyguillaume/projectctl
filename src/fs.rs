@@ -10,10 +10,9 @@ use log::{debug, trace};
 use stub_trait::stub;
 use tempfile::tempdir;
 
-use crate::err::Error;
+use crate::err::{Error, Result};
 
 pub type DirEntries = dyn Iterator<Item = io::Result<DirEntry>>;
-pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg_attr(test, stub)]
 pub trait FileSystem {
@@ -81,7 +80,7 @@ impl FileSystem for DefaultFileSystem {
 mod test {
     use std::{
         collections::HashSet,
-        fs::{read_to_string, File},
+        fs::{read_to_string, write, File},
         io::Write,
     };
 
@@ -97,9 +96,8 @@ mod test {
             fn ok() {
                 let dirpath = tempdir().unwrap().into_path();
                 let src_path = dirpath.join("src");
-                let mut src_file = File::create(&src_path).unwrap();
                 let src_file_content = "Hello world!";
-                write!(src_file, "{}", src_file_content).unwrap();
+                write(&src_path, src_file_content).unwrap();
                 let dest = dirpath.join("dest");
                 DefaultFileSystem.copy(&src_path, &dest).unwrap();
                 let dest_content = read_to_string(&dest).unwrap();

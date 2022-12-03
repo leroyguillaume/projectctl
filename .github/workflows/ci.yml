@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/ci.yml
+      - examples/**
+      - "resources/**"
       - "Cargo.*"
       - "**.rs"
 
@@ -143,7 +145,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-debug
+          key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}-install
 
       - name: Run cargo install
         run: cargo install --path .
@@ -155,3 +157,7 @@ jobs:
           git config --global user.name "$(git log -n 1 --pretty=format:%an)"
           git config --global user.email "$(git log -n 1 --pretty=format:%ae)"
           projectctl -vvv new rs-lib test $PROJECT_DIR
+          cp examples/projectctl.yml $PROJECT_DIR/projectctl.local.yml
+          cd $PROJECT_DIR
+          eval $(projectctl -vvv env)
+          [[ $DEBUG == "true" ]] && [[ $HOST == "localhost" ]] && [[ $PORT == "9090" ]]

@@ -76,7 +76,7 @@ impl Git for DefaultGit {
 
 #[cfg(test)]
 mod test {
-    use std::{fs::File, io::Write};
+    use std::fs::write;
 
     use git2::{Commit, Oid, Signature};
     use tempfile::tempdir;
@@ -145,9 +145,7 @@ mod test {
                 parents: &[&'a Commit],
                 ref_to_update: Option<&str>,
             ) -> Commit<'a> {
-                let mut file = File::create(repo_dirpath.join(rel_filepath)).unwrap();
-                write!(file, "{}", msg).unwrap();
-                drop(file);
+                write(repo_dirpath.join(rel_filepath), msg).unwrap();
                 let mut index = repo.index().unwrap();
                 index.add_path(rel_filepath).unwrap();
                 let tree_id = index.write_tree().unwrap();
@@ -160,8 +158,8 @@ mod test {
             }
 
             #[inline]
-            fn test<G: Fn(&Context) -> Option<Reference>, A: Fn(&Context, Oid)>(
-                data_from_fn: G,
+            fn test<D: Fn(&Context) -> Option<Reference>, A: Fn(&Context, Oid)>(
+                data_from_fn: D,
                 assert_fn: A,
             ) {
                 let remote_dirpath = tempdir().unwrap().into_path();

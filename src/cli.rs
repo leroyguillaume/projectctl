@@ -8,7 +8,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 use log::LevelFilter;
 use regex::Regex;
 
-use crate::cmd::{new::NewCommand, CommandKind};
+use crate::cmd::{env::EnvCommand, new::NewCommand, CommandKind};
 
 pub const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
@@ -27,7 +27,8 @@ pub struct Arguments {
 impl Arguments {
     pub fn into_command_kind(self) -> CommandKind {
         match self.cmd {
-            CommandArgument::New(args) => CommandKind::New(NewCommand::new(args)),
+            CommandArgument::Env(args) => CommandKind::Env(Box::new(EnvCommand::new(args))),
+            CommandArgument::New(args) => CommandKind::New(Box::new(NewCommand::new(args))),
         }
     }
 }
@@ -76,8 +77,40 @@ impl LoggingArguments {
 
 #[derive(Debug, Subcommand)]
 pub enum CommandArgument {
+    #[command(about = "Print environment")]
+    Env(EnvCommandArguments),
+
     #[command(about = "Create new project from template")]
     New(NewCommandArguments),
+}
+
+#[derive(Args, Clone, Debug, Eq, PartialEq)]
+pub struct EnvCommandArguments {
+    #[clap(
+        help = "Configuration files (from least to most priority)",
+        long = "config",
+        name = "FILE",
+        short = 'f'
+    )]
+    pub cfg_filepaths: Vec<PathBuf>,
+
+    #[clap(
+        help = "Project directory",
+        long = "directory",
+        name = "DIRECTORY",
+        short = 'd'
+    )]
+    pub project_dirpath: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl EnvCommandArguments {
+    pub fn default_for_test() -> Self {
+        Self {
+            cfg_filepaths: vec![],
+            project_dirpath: None,
+        }
+    }
 }
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
@@ -181,7 +214,7 @@ mod test {
             use super::*;
 
             macro_rules! test {
-                ($ident:ident, $cmd:expr, $kind:path) => {
+                ($ident:ident, $cmd:expr, $kind:ident) => {
                     #[test]
                     fn $ident() {
                         let args = Arguments {
@@ -189,16 +222,22 @@ mod test {
                             logging: LoggingArguments::default(),
                         };
                         match args.into_command_kind() {
-                            $kind(_) => (),
+                            CommandKind::$kind(_) => (),
+                            kind => panic!("expected {} (actual: {:?})", stringify!($ident), kind),
                         }
                     }
                 };
             }
 
             test!(
+                env,
+                CommandArgument::Env(EnvCommandArguments::default_for_test()),
+                Env
+            );
+            test!(
                 new,
                 CommandArgument::New(NewCommandArguments::default_for_test()),
-                CommandKind::New
+                New
             );
         }
     }

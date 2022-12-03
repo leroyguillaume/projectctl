@@ -1,0 +1,15 @@
+{
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "env": {
+            "type": "object",
+            "additionalProperties": false,
+            "patternProperties": {
+                "^[A-z_][A-z_0-9]+$": {
+                    "type": ["boolean", "integer", "number", "string"]
+                }
+            }
+        }
+    }
+}
