@@ -1,15 +1,21 @@
 use std::{
-    fmt::{Display, Formatter, Result},
+    fmt::{self, Display, Formatter},
     io,
     path::PathBuf,
 };
+
+use jsonschema::ValidationError;
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
     DestinationDirectoryAlreadyExists(PathBuf),
     Git(git2::Error),
     IO(io::Error),
+    InvalidConfig(Vec<ValidationError<'static>>),
     Liquid(liquid::Error),
+    MalformedYaml(serde_yaml::Error),
     TemplateNotFound(String),
 }
 
@@ -19,21 +25,25 @@ impl Error {
             Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
             Self::Git(_) => exitcode::SOFTWARE,
             Self::IO(_) => exitcode::IOERR,
+            Self::InvalidConfig(_) => exitcode::CONFIG,
             Self::Liquid(_) => exitcode::SOFTWARE,
+            Self::MalformedYaml(_) => exitcode::CONFIG,
             Self::TemplateNotFound(_) => exitcode::CONFIG,
         }
     }
 }
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::DestinationDirectoryAlreadyExists(path) => {
                 write!(f, "Directory {} already exists", path.display())
             }
             Self::Git(err) => write!(f, "git: {}", err),
             Self::IO(err) => write!(f, "{}", err),
+            Self::InvalidConfig(_) => write!(f, "Invalid configuration"),
             Self::Liquid(err) => write!(f, "{}", err),
+            Self::MalformedYaml(err) => write!(f, "{}", err),
             Self::TemplateNotFound(tpl) => write!(f, "Template `{}` not found", tpl),
         }
     }
@@ -82,9 +92,19 @@ mod test {
                 exitcode::IOERR
             );
             test!(
+                invalid_config,
+                Error::InvalidConfig(vec![]),
+                exitcode::CONFIG
+            );
+            test!(
                 liquid,
                 Error::Liquid(liquid::Error::with_msg("error")),
                 exitcode::SOFTWARE
+            );
+            test!(
+                malformed_yaml,
+                Error::MalformedYaml(serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err()),
+                exitcode::CONFIG
             );
             test!(
                 template_not_found,
@@ -123,10 +143,24 @@ mod test {
         }
 
         #[test]
+        fn invalid_config() {
+            let err = Error::InvalidConfig(vec![]);
+            assert_eq!(err.to_string(), "Invalid configuration");
+        }
+
+        #[test]
         fn liquid() {
             let cause = liquid::Error::with_msg("error");
             let str = cause.to_string();
             let err = Error::Liquid(cause);
+            assert_eq!(err.to_string(), str);
+        }
+
+        #[test]
+        fn malformed_yaml() {
+            let cause = serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err();
+            let str = cause.to_string();
+            let err = Error::MalformedYaml(cause);
             assert_eq!(err.to_string(), str);
         }
 

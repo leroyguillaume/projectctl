@@ -13,7 +13,7 @@ use crate::{
     renderer::{LiquidRenderer, Renderer, Vars},
 };
 
-use super::{Command, CommandKind, Result};
+use super::Result;
 
 const DESCRIPTION_VAR_KEY: &str = "description";
 const GIT_USER_EMAIL_VAR_KEY: &str = "git_user_email";
@@ -38,6 +38,63 @@ impl NewCommand {
             git: Box::new(DefaultGit::new()),
             renderer: Box::new(LiquidRenderer::new()),
         }
+    }
+
+    pub fn run(self) -> Result {
+        info!("Creating project `{}`", self.args.name);
+        let dest = self
+            .args
+            .dest
+            .map(|dest| {
+                debug!("Using {} as destination directory", dest.display());
+                Ok(dest)
+            })
+            .unwrap_or_else(|| {
+                debug!("No destination directory set, using current working directory as parent");
+                self.fs.cwd().map(|cwd| cwd.join(&self.args.name))
+            })?;
+        if dest.exists() {
+            return Err(Error::DestinationDirectoryAlreadyExists(dest));
+        }
+        self.fs.create_dir(&dest)?;
+        let tpl_repo_path = match self.fs.create_temp_dir() {
+            Ok(path) => path,
+            Err(err) => {
+                Self::delete_dir(&dest, self.fs.as_ref());
+                return Err(err);
+            }
+        };
+        let git_ref = self
+            .args
+            .git_branch
+            .map(Reference::Branch)
+            .or_else(|| self.args.git_tag.map(Reference::Tag));
+        let res = self
+            .git
+            .checkout_repository(&self.args.git, git_ref, &tpl_repo_path)
+            .and_then(|_| {
+                let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
+                if tpl_dirpath.is_dir() {
+                    let vars = Self::create_vars(
+                        self.args.name,
+                        self.args.desc,
+                        self.args.vars,
+                        self.git.as_ref(),
+                    );
+                    self.renderer.render_recursively(&tpl_dirpath, &dest, vars)
+                } else {
+                    Err(Error::TemplateNotFound(self.args.tpl))
+                }
+            });
+        Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
+        if res.is_ok() {
+            if let Err(err) = self.git.init(&dest) {
+                warn!("{}", err);
+            }
+        } else {
+            Self::delete_dir(&dest, self.fs.as_ref());
+        }
+        res
     }
 
     #[inline]
@@ -96,69 +153,6 @@ impl NewCommand {
     }
 }
 
-impl Command for NewCommand {
-    fn kind(self) -> CommandKind {
-        CommandKind::New(self)
-    }
-
-    fn run(self) -> Result {
-        info!("Creating project `{}`", self.args.name);
-        let dest = self
-            .args
-            .dest
-            .map(|dest| {
-                debug!("Using {} as destination directory", dest.display());
-                Ok(dest)
-            })
-            .unwrap_or_else(|| {
-                debug!("No destination directory set, using current working directory as parent");
-                self.fs.cwd().map(|cwd| cwd.join(&self.args.name))
-            })?;
-        if dest.exists() {
-            return Err(Error::DestinationDirectoryAlreadyExists(dest));
-        }
-        self.fs.create_dir(&dest)?;
-        let tpl_repo_path = match self.fs.create_temp_dir() {
-            Ok(path) => path,
-            Err(err) => {
-                Self::delete_dir(&dest, self.fs.as_ref());
-                return Err(err);
-            }
-        };
-        let git_ref = self
-            .args
-            .git_branch
-            .map(Reference::Branch)
-            .or_else(|| self.args.git_tag.map(Reference::Tag));
-        let res = self
-            .git
-            .checkout_repository(&self.args.git, git_ref, &tpl_repo_path)
-            .and_then(|_| {
-                let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
-                if tpl_dirpath.is_dir() {
-                    let vars = Self::create_vars(
-                        self.args.name,
-                        self.args.desc,
-                        self.args.vars,
-                        self.git.as_ref(),
-                    );
-                    self.renderer.render_recursively(&tpl_dirpath, &dest, vars)
-                } else {
-                    Err(Error::TemplateNotFound(self.args.tpl))
-                }
-            });
-        Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
-        if res.is_ok() {
-            if let Err(err) = self.git.init(&dest) {
-                warn!("{}", err);
-            }
-        } else {
-            Self::delete_dir(&dest, self.fs.as_ref());
-        }
-        res
-    }
-}
-
 impl Debug for NewCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("NewCommand")
@@ -195,23 +189,6 @@ mod test {
                 let args = NewCommandArguments::default_for_test();
                 let cmd = NewCommand::new(args.clone());
                 assert_eq!(cmd.args, args);
-            }
-        }
-
-        mod kind {
-            use super::*;
-
-            #[test]
-            fn new() {
-                let cmd = NewCommand {
-                    args: NewCommandArguments::default_for_test(),
-                    fs: Box::new(StubFileSystem::new()),
-                    git: Box::new(StubGit::new()),
-                    renderer: Box::new(StubRenderer::new()),
-                };
-                match cmd.kind() {
-                    CommandKind::New(_) => (),
-                }
             }
         }
 

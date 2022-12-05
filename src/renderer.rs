@@ -111,8 +111,8 @@ impl Renderer for LiquidRenderer {
 #[cfg(test)]
 mod test {
     use std::{
-        fs::{copy, create_dir_all, read_dir, read_to_string, File},
-        io::{self, Write},
+        fs::{copy, create_dir_all, read_dir, read_to_string, write},
+        io::{self},
         path::PathBuf,
     };
 
@@ -404,16 +404,12 @@ mod test {
                 create_dir_all(&project_src_dirpath).unwrap();
                 let static_rel_filepath = params.project_src_rel_dirpath.join("static");
                 let static_filepath = tpl_dirpath.join(&static_rel_filepath);
-                let mut static_file = File::create(&static_filepath).unwrap();
-                write!(static_file, "{}", static_file_content).unwrap();
-                drop(static_file);
+                write(&static_filepath, &static_file_content).unwrap();
                 let templated_rel_filepath = params
                     .project_src_rel_dirpath
                     .join(format!("{{{{{}}}}}.{}", var_name, LIQUID_EXTENSION));
                 let templated_filepath = tpl_dirpath.join(&templated_rel_filepath);
-                let mut templated_file = File::create(&templated_filepath).unwrap();
-                write!(templated_file, "{}", params.templated_file_content).unwrap();
-                drop(templated_file);
+                write(&templated_filepath, params.templated_file_content).unwrap();
                 let fs = StubFileSystem::new()
                     .with_stub_of_copy(move |_, src, dest| {
                         (params.copy_fn)()
