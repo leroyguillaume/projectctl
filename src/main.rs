@@ -29,10 +29,14 @@ fn main() {
         Ok(()) => exitcode::OK,
         Err(err) => {
             error!("{}", err);
-            if let Error::InvalidConfig(ref errs) = err {
-                for err in errs {
-                    error!("{}", err);
+            match err {
+                Error::InvalidConfig { ref causes, .. } => {
+                    for cause in causes {
+                        error!("{}", cause);
+                    }
                 }
+                Error::Liquid { ref cause, .. } => error!("{}", cause),
+                _ => (),
             }
             err.to_return_code()
         }

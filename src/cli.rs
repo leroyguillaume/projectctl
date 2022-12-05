@@ -192,14 +192,14 @@ impl Display for InvalidVariableError {
     }
 }
 
-fn parse_key_value(key_value: &str) -> Result<(String, String), InvalidVariableError> {
+fn parse_key_value(key_val: &str) -> Result<(String, String), InvalidVariableError> {
     let regex = Regex::new(KEY_VALUE_PATTERN).unwrap();
-    if let Some(captures) = regex.captures(key_value) {
+    if let Some(captures) = regex.captures(key_val) {
         let key = captures.get(1).unwrap().as_str();
-        let value = captures.get(2).unwrap().as_str();
-        Ok((key.trim().into(), value.trim().into()))
+        let val = captures.get(2).unwrap().as_str();
+        Ok((key.trim().into(), val.trim().into()))
     } else {
-        Err(InvalidVariableError(key_value.into()))
+        Err(InvalidVariableError(key_val.into()))
     }
 }
 
@@ -311,11 +311,11 @@ mod test {
 
         #[inline]
         fn ok(expected_key: &str) {
-            let expected_value = "value";
-            let key_value = format!(" {} = {} ", expected_key, expected_value);
-            let (key, value) = parse_key_value(&key_value).unwrap();
+            let expected_val = "value";
+            let key_val = format!(" {} = {} ", expected_key, expected_val);
+            let (key, val) = parse_key_value(&key_val).unwrap();
             assert_eq!(key, expected_key);
-            assert_eq!(value, expected_value);
+            assert_eq!(val, expected_val);
         }
     }
 }

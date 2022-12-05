@@ -38,41 +38,81 @@ impl FileSystem for DefaultFileSystem {
         debug!("Copying {} into {}", src.display(), dest.display());
         copy(src, dest)
             .map(|len| trace!("{} bytes copied", len))
-            .map_err(Error::IO)
+            .map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "Unable to copy {} into {}: {}",
+                        src.display(),
+                        dest.display(),
+                        err
+                    ),
+                ))
+            })
     }
 
     fn create_dir(&self, path: &Path) -> Result<()> {
         debug!("Creating directory {}", path.display());
-        create_dir_all(path).map_err(Error::IO)
+        create_dir_all(path).map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to create directory {}: {}", path.display(), err),
+            ))
+        })
     }
 
     fn create_temp_dir(&self) -> Result<PathBuf> {
         trace!("Creating temporary directory");
         tempdir()
             .map(|temp_dir| temp_dir.into_path())
-            .map_err(Error::IO)
+            .map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to create temporary directory: {}", err),
+                ))
+            })
     }
 
     fn cwd(&self) -> Result<PathBuf> {
         trace!("Getting current working directory");
-        current_dir().map_err(Error::IO)
+        current_dir().map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to get current working directory: {}", err),
+            ))
+        })
     }
 
     fn delete_dir(&self, path: &Path) -> Result<()> {
         debug!("Deleting directory {}", path.display());
-        remove_dir_all(path).map_err(Error::IO)
+        remove_dir_all(path).map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to delete directory {}: {}", path.display(), err),
+            ))
+        })
     }
 
     fn open(&self, path: &Path, opts: OpenOptions) -> Result<File> {
         trace!("Opening file {}", path.display());
-        opts.open(path).map_err(Error::IO)
+        opts.open(path).map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to open {}: {}", path.display(), err),
+            ))
+        })
     }
 
     fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>> {
         trace!("Reading directory {}", path.display());
         path.read_dir()
             .map(|it| Box::new(it) as Box<DirEntries>)
-            .map_err(Error::IO)
+            .map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to read directory {}: {}", path.display(), err),
+                ))
+            })
     }
 }
 
