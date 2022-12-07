@@ -10,6 +10,10 @@ on:
       - "Cargo.*"
       - "**.rs"
 
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.head_ref }}
+
 jobs:
   build:
     strategy:
