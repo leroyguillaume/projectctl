@@ -121,8 +121,8 @@ impl NewCommand {
             &mut vars,
             git,
         );
-        for (key, value) in cli_vars {
-            Self::inject_var(key, value, &mut vars);
+        for (key, val) in cli_vars {
+            Self::inject_var(key, val, &mut vars);
         }
         vars
     }
@@ -137,17 +137,17 @@ impl NewCommand {
     #[inline]
     fn inject_git_var(key: &str, git_cfg_key: &str, vars: &mut Vars, git: &dyn Git) {
         match git.default_config_value(git_cfg_key) {
-            Ok(value) => Self::inject_var(key.into(), value, vars),
+            Ok(val) => Self::inject_var(key.into(), val, vars),
             Err(err) => warn!("{}", err),
         }
     }
 
     #[inline]
-    fn inject_var(key: String, value: String, vars: &mut Vars) {
-        if let Some(prev_value) = vars.insert(key.clone(), value.clone()) {
+    fn inject_var(key: String, val: String, vars: &mut Vars) {
+        if let Some(prev_value) = vars.insert(key.clone(), val.clone()) {
             warn!(
                 "Variable `{}` is overriden (`{}` over `{}`)",
-                key, value, prev_value
+                key, val, prev_value
             );
         }
     }
@@ -659,7 +659,7 @@ mod test {
                         }
                     })
                     .with_stub_of_default_config_value(move |i, key| {
-                        let value = if i == 0 {
+                        let val = if i == 0 {
                             assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
                             git_username
                         } else if i == 1 {
@@ -669,7 +669,7 @@ mod test {
                             panic!("unexpected key `{}`", key);
                         };
                         (data.params.default_git_cfg_value_fn)()
-                            .map(|_| value.into())
+                            .map(|_| val.into())
                             .map_err(Error::Git)
                     })
                     .with_stub_of_init({

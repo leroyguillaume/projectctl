@@ -13,9 +13,18 @@ pub enum Error {
     DestinationDirectoryAlreadyExists(PathBuf),
     Git(git2::Error),
     IO(io::Error),
-    InvalidConfig(Vec<ValidationError<'static>>),
-    Liquid(liquid::Error),
-    MalformedYaml(serde_yaml::Error),
+    InvalidConfig {
+        causes: Vec<ValidationError<'static>>,
+        path: PathBuf,
+    },
+    Liquid {
+        cause: liquid::Error,
+        src: LiquidErrorSource,
+    },
+    MalformedYaml {
+        cause: serde_yaml::Error,
+        path: PathBuf,
+    },
     TemplateNotFound(String),
 }
 
@@ -25,9 +34,9 @@ impl Error {
             Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
             Self::Git(_) => exitcode::SOFTWARE,
             Self::IO(_) => exitcode::IOERR,
-            Self::InvalidConfig(_) => exitcode::CONFIG,
-            Self::Liquid(_) => exitcode::SOFTWARE,
-            Self::MalformedYaml(_) => exitcode::CONFIG,
+            Self::InvalidConfig { .. } => exitcode::CONFIG,
+            Self::Liquid { .. } => exitcode::SOFTWARE,
+            Self::MalformedYaml { .. } => exitcode::CONFIG,
             Self::TemplateNotFound(_) => exitcode::CONFIG,
         }
     }
@@ -41,15 +50,28 @@ impl Display for Error {
             }
             Self::Git(err) => write!(f, "git: {}", err),
             Self::IO(err) => write!(f, "{}", err),
-            Self::InvalidConfig(_) => write!(f, "Invalid configuration"),
-            Self::Liquid(err) => write!(f, "{}", err),
-            Self::MalformedYaml(err) => write!(f, "{}", err),
+            Self::InvalidConfig { path, .. } => {
+                write!(f, "{}: Invalid configuration", path.display())
+            }
+            Self::Liquid { src: source, .. } => match source {
+                LiquidErrorSource::File(path) => write!(f, "Unable to render {}", path.display()),
+                LiquidErrorSource::Filename(filename) => {
+                    write!(f, "Unable to render `{}`", filename.display())
+                }
+            },
+            Self::MalformedYaml { cause, path } => write!(f, "{}: {}", path.display(), cause),
             Self::TemplateNotFound(tpl) => write!(f, "Template `{}` not found", tpl),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+#[derive(Debug)]
+pub enum LiquidErrorSource {
+    File(PathBuf),
+    Filename(PathBuf),
+}
 
 #[cfg(test)]
 mod test {
@@ -74,7 +96,7 @@ mod test {
 
             test!(
                 destination_directory_already_exists,
-                Error::DestinationDirectoryAlreadyExists(PathBuf::from("/")),
+                Error::DestinationDirectoryAlreadyExists("/".into()),
                 exitcode::IOERR
             );
             test!(
@@ -93,17 +115,26 @@ mod test {
             );
             test!(
                 invalid_config,
-                Error::InvalidConfig(vec![]),
+                Error::InvalidConfig {
+                    causes: vec![],
+                    path: "/".into(),
+                },
                 exitcode::CONFIG
             );
             test!(
                 liquid,
-                Error::Liquid(liquid::Error::with_msg("error")),
+                Error::Liquid {
+                    cause: liquid::Error::with_msg("error"),
+                    src: LiquidErrorSource::File("/".into()),
+                },
                 exitcode::SOFTWARE
             );
             test!(
                 malformed_yaml,
-                Error::MalformedYaml(serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err()),
+                Error::MalformedYaml {
+                    cause: serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err(),
+                    path: "/".into(),
+                },
                 exitcode::CONFIG
             );
             test!(
@@ -144,23 +175,45 @@ mod test {
 
         #[test]
         fn invalid_config() {
-            let err = Error::InvalidConfig(vec![]);
-            assert_eq!(err.to_string(), "Invalid configuration");
+            let path = PathBuf::from("/");
+            let str = format!("{}: Invalid configuration", path.display());
+            let err = Error::InvalidConfig {
+                causes: vec![],
+                path,
+            };
+            assert_eq!(err.to_string(), str);
         }
 
         #[test]
-        fn liquid() {
+        fn liquid_when_src_is_file() {
+            let path = PathBuf::from("/");
             let cause = liquid::Error::with_msg("error");
-            let str = cause.to_string();
-            let err = Error::Liquid(cause);
+            let str = format!("Unable to render {}", path.display());
+            let err = Error::Liquid {
+                cause,
+                src: LiquidErrorSource::File(path),
+            };
+            assert_eq!(err.to_string(), str);
+        }
+
+        #[test]
+        fn liquid_when_src_is_filename() {
+            let filename = PathBuf::from("test");
+            let cause = liquid::Error::with_msg("error");
+            let str = format!("Unable to render `{}`", filename.display());
+            let err = Error::Liquid {
+                cause,
+                src: LiquidErrorSource::Filename(filename),
+            };
             assert_eq!(err.to_string(), str);
         }
 
         #[test]
         fn malformed_yaml() {
+            let path = PathBuf::from("/");
             let cause = serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err();
-            let str = cause.to_string();
-            let err = Error::MalformedYaml(cause);
+            let str = format!("{}: {}", path.display(), cause);
+            let err = Error::MalformedYaml { cause, path };
             assert_eq!(err.to_string(), str);
         }
 

@@ -80,10 +80,14 @@ impl DefaultConfigLoader {
         info!("Loading configuration from {}", filepath.display());
         let file = fs.open(filepath, OpenOptions::new().read(true).to_owned())?;
         debug!("Loading file {}", filepath.display());
-        let cfg_val: Value = serde_yaml::from_reader(file).map_err(Error::MalformedYaml)?;
+        let cfg_val: Value =
+            serde_yaml::from_reader(file).map_err(|cause| Error::MalformedYaml {
+                cause,
+                path: filepath.to_path_buf(),
+            })?;
         debug!("Validating configuration");
         schema.validate(&cfg_val).map_err(|iter| {
-            let errs = iter
+            let causes = iter
                 .map(|err| ValidationError {
                     instance: Cow::Owned(err.instance.into_owned()),
                     instance_path: err.instance_path,
@@ -91,12 +95,15 @@ impl DefaultConfigLoader {
                     schema_path: err.schema_path,
                 })
                 .collect();
-            Error::InvalidConfig(errs)
+            Error::InvalidConfig {
+                causes,
+                path: filepath.to_path_buf(),
+            }
         })?;
         if let Value::Object(cfg_val) = cfg_val {
-            for (key, value) in cfg_val.into_iter() {
+            for (key, val) in cfg_val.into_iter() {
                 match key.as_str() {
-                    ENV_KEY => Self::load_env(value, cfg),
+                    ENV_KEY => Self::load_env(val, cfg),
                     _ => warn!(
                         "Unexpected configuration key `{}` in {}",
                         key,
@@ -138,6 +145,10 @@ mod test {
         mod load {
             use super::*;
 
+            struct Context<'a> {
+                cfg_filepath1: &'a Path,
+            }
+
             struct Parameters {
                 cfg_file_content1: &'static str,
                 cfg_file_content2: &'static str,
@@ -145,47 +156,55 @@ mod test {
 
             #[test]
             fn err_if_yaml_is_malformed() {
-                let res = load(Parameters {
-                    cfg_file_content1: "{",
-                    cfg_file_content2: "",
-                });
-                match res.unwrap_err() {
-                    Error::MalformedYaml(_) => (),
-                    err => panic!("expected MalformedYaml (actual: {:?})", err),
-                }
+                test(
+                    Parameters {
+                        cfg_file_content1: "{",
+                        cfg_file_content2: "",
+                    },
+                    |ctx, res| match res.unwrap_err() {
+                        Error::MalformedYaml { path, .. } => assert_eq!(path, ctx.cfg_filepath1),
+                        err => panic!("expected MalformedYaml (actual: {:?})", err),
+                    },
+                );
             }
 
             #[test]
             fn err_if_config_is_invalid() {
-                let res = load(Parameters {
-                    cfg_file_content1: "key: value",
-                    cfg_file_content2: "",
-                });
-                match res.unwrap_err() {
-                    Error::InvalidConfig(_) => (),
-                    err => panic!("expected InvalidConfig (actual: {:?})", err),
-                }
+                test(
+                    Parameters {
+                        cfg_file_content1: "key: value",
+                        cfg_file_content2: "",
+                    },
+                    |ctx, res| match res.unwrap_err() {
+                        Error::InvalidConfig { path, .. } => assert_eq!(path, ctx.cfg_filepath1),
+                        err => panic!("expected InvalidConfig (actual: {:?})", err),
+                    },
+                );
             }
 
             #[test]
             fn ok() {
-                let expected_cfg = Config {
-                    env: HashMap::from_iter([
-                        ("DEBUG".into(), EnvVarKind::Literal("true".into())),
-                        ("HOST".into(), EnvVarKind::Literal("127.0.0.1".into())),
-                        ("PORT".into(), EnvVarKind::Literal("9090".into())),
-                    ]),
-                };
-                let cfg = load(Parameters {
-                    cfg_file_content1: include_str!("../examples/projectctl.yml"),
-                    cfg_file_content2: "env:\n  HOST: 127.0.0.1",
-                })
-                .unwrap();
-                assert_eq!(cfg, expected_cfg);
+                test(
+                    Parameters {
+                        cfg_file_content1: include_str!("../examples/projectctl.yml"),
+                        cfg_file_content2: "env:\n  HOST: 127.0.0.1",
+                    },
+                    |_, res| {
+                        let cfg = res.unwrap();
+                        let expected_cfg = Config {
+                            env: HashMap::from_iter([
+                                ("DEBUG".into(), EnvVarKind::Literal("true".into())),
+                                ("HOST".into(), EnvVarKind::Literal("127.0.0.1".into())),
+                                ("PORT".into(), EnvVarKind::Literal("9090".into())),
+                            ]),
+                        };
+                        assert_eq!(cfg, expected_cfg);
+                    },
+                );
             }
 
             #[inline]
-            fn load(params: Parameters) -> Result<Config> {
+            fn test<A: Fn(&Context, Result<Config>)>(params: Parameters, assert_fn: A) {
                 let dirpath = tempdir().unwrap().into_path();
                 let cfg_filepath1 = dirpath.join("projectctl1.yml");
                 let cfg_filepath2 = dirpath.join("projectctl2.yml");
@@ -206,7 +225,11 @@ mod test {
                     }
                 });
                 let loader = DefaultConfigLoader { fs: Box::new(fs) };
-                loader.load(&[cfg_filepath1, cfg_filepath2])
+                let res = loader.load(&[cfg_filepath1.clone(), cfg_filepath2]);
+                let ctx = Context {
+                    cfg_filepath1: &cfg_filepath1,
+                };
+                assert_fn(&ctx, res);
             }
         }
     }

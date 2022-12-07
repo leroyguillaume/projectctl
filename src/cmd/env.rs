@@ -177,7 +177,7 @@ mod test {
 
             #[test]
             fn ok_when_cfg_filepaths_is_not_empty_and_project_dirpath_is_undefined() {
-                let cfg_filepaths = vec![PathBuf::from("/"), PathBuf::from("/etc")];
+                let cfg_filepaths = vec!["/".into(), "/etc".into()];
                 test(
                     |ctx| Data {
                         cfg_filepaths: cfg_filepaths.clone(),
@@ -202,7 +202,7 @@ mod test {
 
             #[test]
             fn ok_when_cfg_filepaths_is_not_empty_and_project_dirpath_is_defined() {
-                let cfg_filepaths = vec![PathBuf::from("/"), PathBuf::from("/etc")];
+                let cfg_filepaths = vec!["/".into(), "/etc".into()];
                 test(
                     |ctx| Data {
                         cfg_filepaths: cfg_filepaths.clone(),
