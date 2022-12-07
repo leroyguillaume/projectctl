@@ -45,7 +45,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ matrix.target.name }}-cargo-debug
+          key: ${{ matrix.target.name }}-cargo
 
       - name: Run cross build
         uses: actions-rs/cargo@v1
@@ -72,7 +72,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: x86_64-unknown-linux-gnu-cargo-debug
+          key: x86_64-unknown-linux-gnu-cargo
 
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.0
@@ -106,7 +106,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ matrix.target.name }}-cargo-debug
+          key: ${{ matrix.target.name }}-cargo
 
       - name: Configure git user/email
         run: |
@@ -149,7 +149,7 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ matrix.target.name }}-cargo-install
+          key: ${{ matrix.target.name }}-cargo
 
       - name: Run cargo install
         run: cargo install --path .
