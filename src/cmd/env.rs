@@ -3,6 +3,8 @@ use std::{
     io::Write,
 };
 
+use regex::Regex;
+
 use crate::{
     cfg::{ConfigLoader, DefaultConfigLoader, EnvVarKind},
     cli::EnvCommandArguments,
@@ -12,6 +14,8 @@ use crate::{
 };
 
 use super::Result;
+
+const SPECIAL_CHARS_PATTERN: &str = "[\"$]";
 
 pub struct EnvCommand {
     args: EnvCommandArguments,
@@ -49,9 +53,11 @@ impl EnvCommand {
             self.args.cfg_filepaths
         };
         let cfg = self.cfg_loader.load(&cfg_filepaths)?;
+        let val_regex = Regex::new(SPECIAL_CHARS_PATTERN).unwrap();
         for (key, kind) in cfg.env {
             match kind {
                 EnvVarKind::Literal(val) => {
+                    let val = val_regex.replace_all(&val, "\\$0");
                     writeln!(out, "export {}=\"{}\"", key, val).map_err(Error::IO)?
                 }
             }
@@ -104,6 +110,7 @@ mod test {
 
             struct Context<'a> {
                 cwd: &'a Path,
+                escaped_var_val: &'a str,
                 project_dirpath: &'a Path,
                 var_key: &'a str,
                 var_val: &'a str,
@@ -164,10 +171,7 @@ mod test {
                             },
                         }
                     },
-                    |ctx, out| {
-                        let expected_out = format!("export {}=\"{}\"\n", ctx.var_key, ctx.var_val);
-                        assert_eq!(out, expected_out);
-                    },
+                    verify_export,
                 );
             }
 
@@ -192,10 +196,7 @@ mod test {
                             local_cfg_filepath: None,
                         },
                     },
-                    |ctx, out| {
-                        let expected_out = format!("export {}=\"{}\"\n", ctx.var_key, ctx.var_val);
-                        assert_eq!(out, expected_out);
-                    },
+                    verify_export,
                 );
             }
 
@@ -220,10 +221,7 @@ mod test {
                             local_cfg_filepath: None,
                         },
                     },
-                    |ctx, out| {
-                        let expected_out = format!("export {}=\"{}\"\n", ctx.var_key, ctx.var_val);
-                        assert_eq!(out, expected_out);
-                    },
+                    verify_export,
                 );
             }
 
@@ -255,10 +253,7 @@ mod test {
                             },
                         }
                     },
-                    |ctx, out| {
-                        let expected_out = format!("export {}=\"{}\"\n", ctx.var_key, ctx.var_val);
-                        assert_eq!(out, expected_out);
-                    },
+                    verify_export,
                 );
             }
 
@@ -267,15 +262,14 @@ mod test {
                 data_from_fn: D,
                 assert_fn: A,
             ) {
-                let var_key = "VAR";
-                let var_val = "val";
                 let cwd = tempdir().unwrap().into_path();
                 let project_dirpath = tempdir().unwrap().into_path();
                 let ctx = Context {
                     cwd: &cwd,
+                    escaped_var_val: "\\\"\\$VAR",
                     project_dirpath: &project_dirpath,
-                    var_key,
-                    var_val,
+                    var_key: "VAR",
+                    var_val: "\"$VAR",
                 };
                 let data = data_from_fn(&ctx);
                 if let Some(path) = data.params.default_cfg_filepath {
@@ -300,6 +294,12 @@ mod test {
                 let mut out = vec![];
                 cmd.run(&mut out).unwrap();
                 assert_fn(&ctx, String::from_utf8(out).unwrap());
+            }
+
+            #[inline]
+            fn verify_export(ctx: &Context, out: String) {
+                let expected_out = format!("export {}=\"{}\"\n", ctx.var_key, ctx.escaped_var_val);
+                assert_eq!(out, expected_out);
             }
         }
     }
