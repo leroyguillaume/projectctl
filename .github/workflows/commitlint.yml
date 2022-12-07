@@ -4,6 +4,10 @@ name: commitlint
 on:
   pull_request:
 
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.head_ref }}
+
 jobs:
   commitlint:
     runs-on: ubuntu-latest
