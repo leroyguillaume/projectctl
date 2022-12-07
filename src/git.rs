@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use git2::{Error, Repository};
-use log::debug;
+use git2::{build::CheckoutBuilder, Error, Repository};
+use log::{debug, trace};
 #[cfg(test)]
 use stub_trait::stub;
 
@@ -39,6 +39,8 @@ impl Git for DefaultGit {
             };
             debug!("Setting HEAD to {}", reference);
             repo.set_head(&reference)?;
+            trace!("Checking out HEAD");
+            repo.checkout_head(Some(CheckoutBuilder::new().force()))?;
         }
         Ok(repo)
     }
