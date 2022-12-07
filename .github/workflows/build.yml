@@ -1,0 +1,57 @@
+---
+name: build
+
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.head_ref }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - name: x86_64-apple-darwin
+            os: macos-latest
+    name: build (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target.name }}
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ matrix.target.name }}-cargo
+
+      - name: Run cross build (debug)
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target.name }}
+
+      - name: Run cross build (release)
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target.name }} --release
