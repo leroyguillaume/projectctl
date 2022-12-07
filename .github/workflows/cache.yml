@@ -1,16 +1,31 @@
 ---
-name: build
+name: cache
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
 
 concurrency:
   cancel-in-progress: true
   group: ${{ github.workflow }}-${{ github.head_ref }}
 
 jobs:
-  build:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          cache: npm
+
+      - name: Run npm install
+        run: npm install
+
+  cargo:
     strategy:
       matrix:
         target:
@@ -20,7 +35,7 @@ jobs:
             os: ubuntu-latest
           - name: x86_64-apple-darwin
             os: macos-latest
-    name: build (${{ matrix.target.name }})
+    name: cargo (${{ matrix.target.name }})
     runs-on: ${{ matrix.target.os }}
     steps:
       - name: Checkout code
@@ -55,3 +70,26 @@ jobs:
           use-cross: true
           command: build
           args: --target ${{ matrix.target.name }} --release
+
+  pip:
+    needs: [cargo]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Restore cargo cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: x86_64-unknown-linux-gnu-cargo
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.0
