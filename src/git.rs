@@ -5,7 +5,7 @@ use log::{debug, trace, warn};
 #[cfg(test)]
 use stub_trait::stub;
 
-use crate::err::Error;
+use crate::err::{Error, Result};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Reference {
@@ -20,11 +20,11 @@ pub trait Git {
         url: &str,
         reference: Option<Reference>,
         dest: &Path,
-    ) -> Result<Repository, Error>;
+    ) -> Result<Repository>;
 
-    fn default_config_value(&self, key: &str) -> Result<String, Error>;
+    fn default_config_value(&self, key: &str) -> Result<String>;
 
-    fn init(&self, path: &Path) -> Result<Repository, Error>;
+    fn init(&self, path: &Path) -> Result<Repository>;
 }
 
 pub struct DefaultGit {
@@ -49,7 +49,7 @@ impl Git for DefaultGit {
         url: &str,
         reference: Option<Reference>,
         dest: &Path,
-    ) -> Result<Repository, Error> {
+    ) -> Result<Repository> {
         debug!("Cloning {} into {}", url, dest.display());
         let repo = Repository::clone(url, dest).map_err(Error::Git)?;
         if let Some(reference) = reference {
@@ -66,12 +66,12 @@ impl Git for DefaultGit {
         Ok(repo)
     }
 
-    fn default_config_value(&self, key: &str) -> Result<String, Error> {
+    fn default_config_value(&self, key: &str) -> Result<String> {
         debug!("Reading `{}` from git default configuration", key);
         self.cfg.get_string(key).map_err(Error::Git)
     }
 
-    fn init(&self, path: &Path) -> Result<Repository, Error> {
+    fn init(&self, path: &Path) -> Result<Repository> {
         debug!("Initializing git repository into {}", path.display());
         Repository::init(path).map_err(Error::Git)
     }
@@ -79,9 +79,12 @@ impl Git for DefaultGit {
 
 #[cfg(test)]
 mod test {
-    use std::fs::write;
+    use std::{
+        fs::{read_to_string, write},
+        path::PathBuf,
+    };
 
-    use git2::{Commit, Oid, Signature};
+    use git2::{Commit, Signature};
     use tempfile::tempdir;
 
     use super::*;
@@ -89,32 +92,31 @@ mod test {
     mod default_git {
         use super::*;
 
-        mod new {
-            use super::*;
-
-            #[test]
-            fn git() {
-                DefaultGit::new();
-            }
-        }
-
         mod checkout_repository {
             use super::*;
 
             struct Context {
                 branch: &'static str,
-                commit_v1_1_id: Oid,
-                commit_v2_id: Oid,
-                commit_v3_id: Oid,
+                file_content: &'static str,
+                file_content_branch: &'static str,
+                file_content_tag: &'static str,
+                filepath: PathBuf,
+                remote_filepath: PathBuf,
+                remote_repo: Repository,
                 tag: &'static str,
             }
 
+            struct Parameters {
+                reference: Option<Reference>,
+            }
+
             #[test]
-            fn ok_when_ref_is_unset() {
+            fn ok_when_ref_is_none() {
                 test(
-                    |_| None,
-                    |ctx, commit_id| {
-                        assert_eq!(commit_id, ctx.commit_v3_id);
+                    |_| Parameters { reference: None },
+                    |ctx, res| {
+                        res.unwrap();
+                        assert_file_content(ctx, ctx.file_content);
                     },
                 );
             }
@@ -122,9 +124,12 @@ mod test {
             #[test]
             fn ok_when_ref_is_branch() {
                 test(
-                    |ctx| Some(Reference::Branch(ctx.branch.into())),
-                    |ctx, commit_id| {
-                        assert_eq!(commit_id, ctx.commit_v1_1_id);
+                    |ctx| Parameters {
+                        reference: Some(Reference::Branch(ctx.branch.into())),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        assert_file_content(ctx, ctx.file_content_branch);
                     },
                 );
             }
@@ -132,95 +137,95 @@ mod test {
             #[test]
             fn ok_when_ref_is_tag() {
                 test(
-                    |ctx| Some(Reference::Tag(ctx.tag.into())),
-                    |ctx, commit_id| {
-                        assert_eq!(commit_id, ctx.commit_v2_id);
+                    |ctx| Parameters {
+                        reference: Some(Reference::Tag(ctx.tag.into())),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        assert_file_content(ctx, ctx.file_content_tag);
                     },
                 );
             }
 
-            #[inline]
-            fn write_and_commit<'a>(
-                repo: &'a Repository,
-                repo_dirpath: &Path,
-                rel_filepath: &Path,
-                msg: &str,
-                parents: &[&'a Commit],
-                ref_to_update: Option<&str>,
-            ) -> Commit<'a> {
-                write(repo_dirpath.join(rel_filepath), msg).unwrap();
-                let mut index = repo.index().unwrap();
-                index.add_path(rel_filepath).unwrap();
-                let tree_id = index.write_tree().unwrap();
-                let tree = repo.find_tree(tree_id).unwrap();
-                let sig = Signature::now("test", "test@local").unwrap();
-                let commit_id = repo
-                    .commit(ref_to_update, &sig, &sig, msg, &tree, parents)
-                    .unwrap();
-                repo.find_commit(commit_id).unwrap()
+            fn assert_file_content(ctx: &Context, expected_content: &str) {
+                let content = read_to_string(&ctx.filepath).unwrap();
+                assert_eq!(content, expected_content);
             }
 
-            #[inline]
-            fn test<D: Fn(&Context) -> Option<Reference>, A: Fn(&Context, Oid)>(
-                data_from_fn: D,
+            fn commit<'a>(
+                ctx: &'a Context,
+                content: &str,
+                parents: &[&'a Commit],
+                update_head: bool,
+            ) -> Commit<'a> {
+                write(&ctx.remote_filepath, content).unwrap();
+                let mut index = ctx.remote_repo.index().unwrap();
+                let filename = Path::new(ctx.remote_filepath.file_name().unwrap());
+                index.add_path(filename).unwrap();
+                let tree_id = index.write_tree().unwrap();
+                let tree = ctx.remote_repo.find_tree(tree_id).unwrap();
+                let sig = Signature::now("test", "test@local").unwrap();
+                let commit_id = ctx
+                    .remote_repo
+                    .commit(
+                        update_head.then_some("HEAD"),
+                        &sig,
+                        &sig,
+                        content,
+                        &tree,
+                        parents,
+                    )
+                    .unwrap();
+                ctx.remote_repo.find_commit(commit_id).unwrap()
+            }
+
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<Repository>)>(
+                create_params_fn: P,
                 assert_fn: A,
             ) {
                 let remote_dirpath = tempdir().unwrap().into_path();
-                let rel_filepath = Path::new("file");
-                let branch = "develop";
-                let tag = "v2";
-                let remote_repo = Repository::init(&remote_dirpath).unwrap();
-                let commit_v1 = write_and_commit(
-                    &remote_repo,
-                    &remote_dirpath,
-                    rel_filepath,
-                    "v1",
-                    &[],
-                    Some("HEAD"),
-                );
-                let commit_v1_1 = write_and_commit(
-                    &remote_repo,
-                    &remote_dirpath,
-                    rel_filepath,
-                    "v1_1",
-                    &[&commit_v1],
-                    None,
-                );
-                let commit_v2 = write_and_commit(
-                    &remote_repo,
-                    &remote_dirpath,
-                    rel_filepath,
-                    "v2",
-                    &[&commit_v1],
-                    Some("HEAD"),
-                );
-                let commit_v3 = write_and_commit(
-                    &remote_repo,
-                    &remote_dirpath,
-                    rel_filepath,
-                    "v3",
-                    &[&commit_v2],
-                    Some("HEAD"),
-                );
-                remote_repo.branch(branch, &commit_v1_1, false).unwrap();
-                remote_repo
-                    .tag(tag, commit_v2.as_object(), &commit_v1.author(), "v2", false)
-                    .unwrap();
                 let dest = tempdir().unwrap().into_path();
+                let remote_repo = Repository::init(&remote_dirpath).unwrap();
+                let filename = Path::new("file");
                 let ctx = Context {
-                    branch,
-                    commit_v1_1_id: commit_v1_1.id(),
-                    commit_v2_id: commit_v2.id(),
-                    commit_v3_id: commit_v3.id(),
-                    tag,
+                    branch: "develop",
+                    file_content: "v0.2.0-dev",
+                    file_content_branch: "v0.1.1-dev",
+                    file_content_tag: "v0.1.0",
+                    filepath: dest.join(filename),
+                    remote_filepath: remote_dirpath.join(filename),
+                    remote_repo,
+                    tag: "v0.1.0",
                 };
-                let reference = data_from_fn(&ctx);
-                let url = remote_dirpath.to_str().unwrap();
+                let params = create_params_fn(&ctx);
+                let commit_root = commit(&ctx, "v0.1.0-dev", &[], true);
+                let commit_branch = commit(&ctx, ctx.file_content_branch, &[&commit_root], false);
+                let commit_tag = commit(&ctx, ctx.file_content_tag, &[&commit_root], true);
+                commit(&ctx, ctx.file_content, &[&commit_tag], true);
+                ctx.remote_repo
+                    .checkout_head(Some(CheckoutBuilder::new().force()))
+                    .unwrap();
+                ctx.remote_repo
+                    .branch(ctx.branch, &commit_branch, false)
+                    .unwrap();
+                ctx.remote_repo
+                    .tag(
+                        ctx.tag,
+                        commit_tag.as_object(),
+                        &commit_tag.author(),
+                        ctx.file_content_tag,
+                        false,
+                    )
+                    .unwrap();
                 let git = DefaultGit {
                     cfg: Config::open_default().unwrap(),
                 };
-                let repo = git.checkout_repository(url, reference, &dest).unwrap();
-                assert_fn(&ctx, repo.head().unwrap().peel_to_commit().unwrap().id());
+                let res = git.checkout_repository(
+                    remote_dirpath.to_str().unwrap(),
+                    params.reference,
+                    &dest,
+                );
+                assert_fn(&ctx, res);
             }
         }
 

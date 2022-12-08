@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::cmd::{env::EnvCommand, new::NewCommand, CommandKind};
 
-pub const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
+const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
 const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
@@ -84,7 +84,7 @@ pub enum CommandArgument {
     New(NewCommandArguments),
 }
 
-#[derive(Args, Clone, Debug, Eq, PartialEq)]
+#[derive(Args, Clone, Debug, Default, Eq, PartialEq)]
 pub struct EnvCommandArguments {
     #[clap(
         help = "Configuration files (from least to most priority)",
@@ -101,16 +101,6 @@ pub struct EnvCommandArguments {
         short = 'd'
     )]
     pub project_dirpath: Option<PathBuf>,
-}
-
-#[cfg(test)]
-impl EnvCommandArguments {
-    pub fn default_for_test() -> Self {
-        Self {
-            cfg_filepaths: vec![],
-            project_dirpath: None,
-        }
-    }
 }
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
@@ -167,15 +157,15 @@ pub struct NewCommandArguments {
 
 #[cfg(test)]
 impl NewCommandArguments {
-    pub fn default_for_test() -> Self {
+    pub fn new(tpl: String, name: String) -> Self {
         Self {
             desc: None,
             dest: None,
             git: DEFAULT_TPL_GIT_REPO_URL.into(),
             git_branch: None,
             git_tag: None,
-            name: String::from("myproject"),
-            tpl: String::from("mytemplate"),
+            name,
+            tpl,
             vars: vec![],
         }
     }
@@ -213,32 +203,48 @@ mod test {
         mod into_command_kind {
             use super::*;
 
-            macro_rules! test {
-                ($ident:ident, $cmd:expr, $kind:ident) => {
-                    #[test]
-                    fn $ident() {
-                        let args = Arguments {
-                            cmd: $cmd,
-                            logging: LoggingArguments::default(),
-                        };
-                        match args.into_command_kind() {
-                            CommandKind::$kind(_) => (),
-                            kind => panic!("expected {} (actual: {:?})", stringify!($ident), kind),
-                        }
-                    }
-                };
+            struct Parameters {
+                cmd: CommandArgument,
             }
 
-            test!(
-                env,
-                CommandArgument::Env(EnvCommandArguments::default_for_test()),
-                Env
-            );
-            test!(
-                new,
-                CommandArgument::New(NewCommandArguments::default_for_test()),
-                New
-            );
+            #[test]
+            fn env() {
+                test(
+                    || Parameters {
+                        cmd: CommandArgument::Env(EnvCommandArguments::default()),
+                    },
+                    |kind| match kind {
+                        CommandKind::Env(_) => (),
+                        kind => panic!("expected Env (actual: {:?})", kind),
+                    },
+                )
+            }
+
+            #[test]
+            fn new() {
+                test(
+                    || Parameters {
+                        cmd: CommandArgument::New(NewCommandArguments::new(
+                            "test".into(),
+                            "my-project".into(),
+                        )),
+                    },
+                    |kind| match kind {
+                        CommandKind::New(_) => (),
+                        kind => panic!("expected New (actual: {:?})", kind),
+                    },
+                )
+            }
+
+            fn test<P: Fn() -> Parameters, A: Fn(CommandKind)>(create_params_fn: P, assert_fn: A) {
+                let params = create_params_fn();
+                let args = Arguments {
+                    cmd: params.cmd,
+                    logging: LoggingArguments::default(),
+                };
+                let kind = args.into_command_kind();
+                assert_fn(kind);
+            }
         }
     }
 
@@ -248,74 +254,200 @@ mod test {
         mod to_level_filter {
             use super::*;
 
-            macro_rules! test {
-                ($ident:ident, $quiet:literal, $verbose:literal, $lvl:expr) => {
-                    #[test]
-                    fn $ident() {
-                        let args = LoggingArguments {
-                            quiet: $quiet,
-                            no_color: false,
-                            verbose: $verbose,
-                        };
-                        assert_eq!(args.to_level_filter(), $lvl);
-                    }
-                };
+            struct Parameters {
+                quiet: u8,
+                verbose: u8,
             }
 
-            test!(off, 2, 0, LevelFilter::Off);
-            test!(error, 1, 0, LevelFilter::Error);
-            test!(warn, 0, 0, LevelFilter::Warn);
-            test!(info, 0, 1, LevelFilter::Info);
-            test!(debug, 0, 2, LevelFilter::Debug);
-            test!(trace, 0, 3, LevelFilter::Trace);
+            #[test]
+            fn debug() {
+                test(
+                    || Parameters {
+                        quiet: 0,
+                        verbose: 2,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Debug),
+                );
+            }
+
+            #[test]
+            fn error() {
+                test(
+                    || Parameters {
+                        quiet: 1,
+                        verbose: 0,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Error),
+                );
+            }
+
+            #[test]
+            fn info() {
+                test(
+                    || Parameters {
+                        quiet: 0,
+                        verbose: 1,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Info),
+                );
+            }
+
+            #[test]
+            fn off() {
+                test(
+                    || Parameters {
+                        quiet: 2,
+                        verbose: 0,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Off),
+                );
+            }
+
+            #[test]
+            fn trace() {
+                test(
+                    || Parameters {
+                        quiet: 0,
+                        verbose: 3,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Trace),
+                );
+            }
+
+            #[test]
+            fn warn() {
+                test(
+                    || Parameters {
+                        quiet: 0,
+                        verbose: 0,
+                    },
+                    |filter| assert_eq!(filter, LevelFilter::Warn),
+                );
+            }
+
+            fn test<P: Fn() -> Parameters, A: Fn(LevelFilter)>(create_params_fn: P, assert_fn: A) {
+                let params = create_params_fn();
+                let args = LoggingArguments {
+                    quiet: params.quiet,
+                    verbose: params.verbose,
+                    ..LoggingArguments::default()
+                };
+                let filter = args.to_level_filter();
+                assert_fn(filter);
+            }
         }
     }
 
     mod parse_key_value {
         use super::*;
 
-        #[test]
-        fn err_if_equal_is_missing() {
-            parse_key_value("key").unwrap_err();
+        struct Parameters {
+            key_val: String,
         }
 
         #[test]
-        fn err_if_key_starts_with_digit() {
-            parse_key_value("0var=value").unwrap_err();
+        fn err_when_equal_is_missing() {
+            let key_val = "key";
+            test(
+                || Parameters {
+                    key_val: key_val.into(),
+                },
+                |res| assert_err(res, key_val),
+            );
         }
 
         #[test]
-        fn err_if_key_starts_with_dash() {
-            parse_key_value("-=value").unwrap_err();
+        fn err_when_key_starts_with_digit() {
+            let key_val = "0var=value";
+            test(
+                || Parameters {
+                    key_val: key_val.into(),
+                },
+                |res| assert_err(res, key_val),
+            );
+        }
+
+        #[test]
+        fn err_when_key_starts_with_dash() {
+            let key_val = "-=value";
+            test(
+                || Parameters {
+                    key_val: key_val.into(),
+                },
+                |res| assert_err(res, key_val),
+            );
         }
 
         #[test]
         fn ok_when_key_contains_dash_and_underscore() {
-            ok("v_-0");
+            let expected_key = "v_-0";
+            let expected_val = "val";
+            test(
+                || Parameters {
+                    key_val: format!(" {} = {} ", expected_key, expected_val),
+                },
+                |res| assert_key_val(res, expected_key, expected_val),
+            );
         }
 
         #[test]
         fn ok_when_key_is_single_underscore() {
-            ok("_");
+            let expected_key = "_";
+            let expected_val = "val";
+            test(
+                || Parameters {
+                    key_val: format!(" {} = {} ", expected_key, expected_val),
+                },
+                |res| assert_key_val(res, expected_key, expected_val),
+            );
         }
 
         #[test]
         fn ok_when_key_is_single_letter() {
-            ok("a");
+            let expected_key = "a";
+            let expected_val = "val";
+            test(
+                || Parameters {
+                    key_val: format!(" {} = {} ", expected_key, expected_val),
+                },
+                |res| assert_key_val(res, expected_key, expected_val),
+            );
         }
 
         #[test]
         fn ok_when_key_is_word() {
-            ok("var");
+            let expected_key = "var";
+            let expected_val = "val";
+            test(
+                || Parameters {
+                    key_val: format!(" {} = {} ", expected_key, expected_val),
+                },
+                |res| assert_key_val(res, expected_key, expected_val),
+            );
         }
 
-        #[inline]
-        fn ok(expected_key: &str) {
-            let expected_val = "value";
-            let key_val = format!(" {} = {} ", expected_key, expected_val);
-            let (key, val) = parse_key_value(&key_val).unwrap();
+        fn assert_err(res: Result<(String, String), InvalidVariableError>, expected_key_val: &str) {
+            let err = res.unwrap_err();
+            assert_eq!(err.0, expected_key_val);
+        }
+
+        fn assert_key_val(
+            res: Result<(String, String), InvalidVariableError>,
+            expected_key: &str,
+            expected_val: &str,
+        ) {
+            let (key, val) = res.unwrap();
             assert_eq!(key, expected_key);
             assert_eq!(val, expected_val);
+        }
+
+        fn test<P: Fn() -> Parameters, A: Fn(Result<(String, String), InvalidVariableError>)>(
+            create_params_fn: P,
+            assert_fn: A,
+        ) {
+            let params = create_params_fn();
+            let res = parse_key_value(&params.key_val);
+            assert_fn(res);
         }
     }
 }

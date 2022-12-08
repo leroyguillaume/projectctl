@@ -85,144 +85,231 @@ mod test {
         mod to_return_code {
             use super::*;
 
-            macro_rules! test {
-                ($ident:ident, $err:expr, $rc:expr) => {
-                    #[test]
-                    fn $ident() {
-                        assert_eq!($err.to_return_code(), $rc);
-                    }
-                };
+            struct Parameters {
+                err: Error,
             }
 
-            test!(
-                destination_directory_already_exists,
-                Error::DestinationDirectoryAlreadyExists("/".into()),
-                exitcode::IOERR
-            );
-            test!(
-                git,
-                Error::Git(git2::Error::new(
-                    git2::ErrorCode::Ambiguous,
-                    git2::ErrorClass::Callback,
-                    "",
-                )),
-                exitcode::SOFTWARE
-            );
-            test!(
-                io,
-                Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)),
-                exitcode::IOERR
-            );
-            test!(
-                invalid_config,
-                Error::InvalidConfig {
-                    causes: vec![],
-                    path: "/".into(),
-                },
-                exitcode::CONFIG
-            );
-            test!(
-                liquid,
-                Error::Liquid {
-                    cause: liquid::Error::with_msg("error"),
-                    src: LiquidErrorSource::File("/".into()),
-                },
-                exitcode::SOFTWARE
-            );
-            test!(
-                malformed_yaml,
-                Error::MalformedYaml {
-                    cause: serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err(),
-                    path: "/".into(),
-                },
-                exitcode::CONFIG
-            );
-            test!(
-                template_not_found,
-                Error::TemplateNotFound("test".into()),
-                exitcode::CONFIG
-            );
+            #[test]
+            fn destination_directory_already_exists() {
+                test(
+                    || Parameters {
+                        err: Error::DestinationDirectoryAlreadyExists("/".into()),
+                    },
+                    |rc| assert_eq!(rc, exitcode::IOERR),
+                );
+            }
+
+            #[test]
+            fn git() {
+                test(
+                    || Parameters {
+                        err: Error::Git(git2::Error::new(
+                            git2::ErrorCode::Ambiguous,
+                            git2::ErrorClass::Callback,
+                            "",
+                        )),
+                    },
+                    |rc| assert_eq!(rc, exitcode::SOFTWARE),
+                );
+            }
+
+            #[test]
+            fn io() {
+                test(
+                    || Parameters {
+                        err: Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)),
+                    },
+                    |rc| assert_eq!(rc, exitcode::IOERR),
+                );
+            }
+
+            #[test]
+            fn invalid_config() {
+                test(
+                    || Parameters {
+                        err: Error::InvalidConfig {
+                            causes: vec![],
+                            path: "/".into(),
+                        },
+                    },
+                    |rc| assert_eq!(rc, exitcode::CONFIG),
+                );
+            }
+
+            #[test]
+            fn liquid() {
+                test(
+                    || Parameters {
+                        err: Error::Liquid {
+                            cause: liquid::Error::with_msg("error"),
+                            src: LiquidErrorSource::File("/".into()),
+                        },
+                    },
+                    |rc| assert_eq!(rc, exitcode::SOFTWARE),
+                );
+            }
+
+            #[test]
+            fn malformed() {
+                test(
+                    || Parameters {
+                        err: Error::MalformedYaml {
+                            cause: serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err(),
+                            path: "/".into(),
+                        },
+                    },
+                    |rc| assert_eq!(rc, exitcode::CONFIG),
+                );
+            }
+
+            #[test]
+            fn template_not_found() {
+                test(
+                    || Parameters {
+                        err: Error::TemplateNotFound("test".into()),
+                    },
+                    |rc| assert_eq!(rc, exitcode::CONFIG),
+                );
+            }
+
+            fn test<P: Fn() -> Parameters, A: Fn(i32)>(create_params_fn: P, assert_fn: A) {
+                let params = create_params_fn();
+                let rc = params.err.to_return_code();
+                assert_fn(rc);
+            }
         }
     }
 
     mod to_string {
         use super::*;
 
+        struct Parameters {
+            err: Error,
+        }
+
         #[test]
         fn destination_directory_already_exists() {
             let path = Path::new("/");
-            let str = format!("Directory {} already exists", path.display());
-            let err = Error::DestinationDirectoryAlreadyExists(path.into());
-            assert_eq!(err.to_string(), str);
+            let expected_str = format!("Directory {} already exists", path.display());
+            test(
+                || Parameters {
+                    err: Error::DestinationDirectoryAlreadyExists(path.to_path_buf()),
+                },
+                |str| assert_eq!(str, expected_str),
+            );
         }
 
         #[test]
         fn git() {
-            let cause =
-                git2::Error::new(git2::ErrorCode::Ambiguous, git2::ErrorClass::Callback, "");
-            let str = format!("git: {}", cause);
-            let err = Error::Git(cause);
-            assert_eq!(err.to_string(), str);
+            let err_code = git2::ErrorCode::Ambiguous;
+            let err_class = git2::ErrorClass::Callback;
+            let err_msg = "";
+            test(
+                || Parameters {
+                    err: Error::Git(git2::Error::new(err_code, err_class, err_msg)),
+                },
+                |str| {
+                    let expected_str =
+                        format!("git: {}", git2::Error::new(err_code, err_class, err_msg));
+                    assert_eq!(str, expected_str);
+                },
+            );
         }
 
         #[test]
         fn io() {
-            let cause = io::Error::from(io::ErrorKind::PermissionDenied);
-            let str = cause.to_string();
-            let err = Error::IO(cause);
-            assert_eq!(err.to_string(), str);
+            let kind = io::ErrorKind::PermissionDenied;
+            test(
+                || Parameters {
+                    err: Error::IO(io::Error::from(kind)),
+                },
+                |str| {
+                    let expected_str = io::Error::from(kind).to_string();
+                    assert_eq!(str, expected_str);
+                },
+            );
         }
 
         #[test]
         fn invalid_config() {
-            let path = PathBuf::from("/");
-            let str = format!("{}: Invalid configuration", path.display());
-            let err = Error::InvalidConfig {
-                causes: vec![],
-                path,
-            };
-            assert_eq!(err.to_string(), str);
+            let path = Path::new("/");
+            let expected_str = format!("{}: Invalid configuration", path.display());
+            test(
+                || Parameters {
+                    err: Error::InvalidConfig {
+                        causes: vec![],
+                        path: path.to_path_buf(),
+                    },
+                },
+                |str| assert_eq!(str, expected_str),
+            );
         }
 
         #[test]
         fn liquid_when_src_is_file() {
-            let path = PathBuf::from("/");
-            let cause = liquid::Error::with_msg("error");
-            let str = format!("Unable to render {}", path.display());
-            let err = Error::Liquid {
-                cause,
-                src: LiquidErrorSource::File(path),
-            };
-            assert_eq!(err.to_string(), str);
+            let path = Path::new("/");
+            let expected_str = format!("Unable to render {}", path.display());
+            test(
+                || Parameters {
+                    err: Error::Liquid {
+                        cause: liquid::Error::with_msg("error"),
+                        src: LiquidErrorSource::File(path.to_path_buf()),
+                    },
+                },
+                |str| assert_eq!(str, expected_str),
+            );
         }
 
         #[test]
         fn liquid_when_src_is_filename() {
-            let filename = PathBuf::from("test");
-            let cause = liquid::Error::with_msg("error");
-            let str = format!("Unable to render `{}`", filename.display());
-            let err = Error::Liquid {
-                cause,
-                src: LiquidErrorSource::Filename(filename),
-            };
-            assert_eq!(err.to_string(), str);
+            let filename = Path::new("test");
+            let expected_str = format!("Unable to render `{}`", filename.display());
+            test(
+                || Parameters {
+                    err: Error::Liquid {
+                        cause: liquid::Error::with_msg("error"),
+                        src: LiquidErrorSource::Filename(filename.to_path_buf()),
+                    },
+                },
+                |str| assert_eq!(str, expected_str),
+            );
         }
 
         #[test]
         fn malformed_yaml() {
-            let path = PathBuf::from("/");
-            let cause = serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err();
-            let str = format!("{}: {}", path.display(), cause);
-            let err = Error::MalformedYaml { cause, path };
-            assert_eq!(err.to_string(), str);
+            let yaml = "{";
+            let path = Path::new("/");
+            test(
+                || Parameters {
+                    err: Error::MalformedYaml {
+                        cause: serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap_err(),
+                        path: path.to_path_buf(),
+                    },
+                },
+                |str| {
+                    let cause = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap_err();
+                    let expected_str = format!("{}: {}", path.display(), cause);
+                    assert_eq!(str, expected_str);
+                },
+            );
         }
 
         #[test]
         fn template_not_found() {
             let tpl = "test";
-            let str = format!("Template `{}` not found", tpl);
-            let err = Error::TemplateNotFound(tpl.into());
-            assert_eq!(err.to_string(), str);
+            let expected_str = format!("Template `{}` not found", tpl);
+            test(
+                || Parameters {
+                    err: Error::TemplateNotFound(tpl.into()),
+                },
+                |str| assert_eq!(str, expected_str),
+            );
+        }
+
+        fn test<P: Fn() -> Parameters, A: Fn(String)>(create_params_fn: P, assert_fn: A) {
+            let params = create_params_fn();
+            let str = params.err.to_string();
+            assert_fn(str);
         }
     }
 }

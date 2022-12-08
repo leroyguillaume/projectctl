@@ -1,9 +1,4 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fs::OpenOptions,
-    path::{Path, PathBuf},
-};
+use std::{borrow::Cow, collections::HashMap, fs::OpenOptions, path::Path};
 
 use jsonschema::{JSONSchema, ValidationError};
 use log::{debug, info, trace, warn};
@@ -32,7 +27,7 @@ pub enum EnvVarKind {
 
 #[cfg_attr(test, stub)]
 pub trait ConfigLoader {
-    fn load(&self, filepaths: &[PathBuf]) -> Result<Config>;
+    fn load(&self, filepaths: &[&Path]) -> Result<Config>;
 }
 
 pub struct DefaultConfigLoader {
@@ -117,7 +112,7 @@ impl DefaultConfigLoader {
 }
 
 impl ConfigLoader for DefaultConfigLoader {
-    fn load(&self, filepaths: &[PathBuf]) -> Result<Config> {
+    fn load(&self, filepaths: &[&Path]) -> Result<Config> {
         let mut cfg = Config::default();
         trace!("Loading configuration JSON schema");
         let schema_val = serde_json::from_str(JSON_SCHEMA).unwrap();
@@ -132,10 +127,8 @@ impl ConfigLoader for DefaultConfigLoader {
 
 #[cfg(test)]
 mod test {
-    use std::fs::write;
+    use std::{fs::write, path::PathBuf};
     use tempfile::tempdir;
-
-    use crate::fs::StubFileSystem;
 
     use super::*;
 
@@ -145,38 +138,39 @@ mod test {
         mod load {
             use super::*;
 
-            struct Context<'a> {
-                cfg_filepath1: &'a Path,
+            struct Context {
+                cfg1_filepath: PathBuf,
+                cfg2_filepath: PathBuf,
             }
 
             struct Parameters {
-                cfg_file_content1: &'static str,
-                cfg_file_content2: &'static str,
+                cfg1_content: String,
+                cfg2_content: String,
             }
 
             #[test]
-            fn err_if_yaml_is_malformed() {
+            fn err_when_yaml_is_malformed() {
                 test(
-                    Parameters {
-                        cfg_file_content1: "{",
-                        cfg_file_content2: "",
+                    |_| Parameters {
+                        cfg1_content: "{".into(),
+                        cfg2_content: "".into(),
                     },
                     |ctx, res| match res.unwrap_err() {
-                        Error::MalformedYaml { path, .. } => assert_eq!(path, ctx.cfg_filepath1),
+                        Error::MalformedYaml { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
                         err => panic!("expected MalformedYaml (actual: {:?})", err),
                     },
                 );
             }
 
             #[test]
-            fn err_if_config_is_invalid() {
+            fn err_when_config_is_invalid() {
                 test(
-                    Parameters {
-                        cfg_file_content1: "key: value",
-                        cfg_file_content2: "",
+                    |_| Parameters {
+                        cfg1_content: "key: value".into(),
+                        cfg2_content: "".into(),
                     },
                     |ctx, res| match res.unwrap_err() {
-                        Error::InvalidConfig { path, .. } => assert_eq!(path, ctx.cfg_filepath1),
+                        Error::InvalidConfig { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
                         err => panic!("expected InvalidConfig (actual: {:?})", err),
                     },
                 );
@@ -184,51 +178,54 @@ mod test {
 
             #[test]
             fn ok() {
+                let var1_key = "VAR1";
+                let var1_val1 = "VAL1-1";
+                let var1_val2 = "VAL1-2";
+                let var2_key = "VAR2";
+                let var2_val = "VAL2";
+                let var3_key = "VAR3";
+                let var3_val = "VAL3";
                 test(
-                    Parameters {
-                        cfg_file_content1: include_str!("../examples/projectctl.yml"),
-                        cfg_file_content2: "env:\n  HOST: 127.0.0.1",
+                    |_| Parameters {
+                        cfg1_content: format!(
+                            "{}:\n  {}: {}\n  {}: {}",
+                            ENV_KEY, var1_key, var1_val1, var2_key, var2_val
+                        ),
+                        cfg2_content: format!(
+                            "{}:\n  {}: {}\n  {}: {}",
+                            ENV_KEY, var1_key, var1_val2, var3_key, var3_val
+                        ),
                     },
                     |_, res| {
-                        let cfg = res.unwrap();
                         let expected_cfg = Config {
                             env: HashMap::from_iter([
-                                ("DEBUG".into(), EnvVarKind::Literal("true".into())),
-                                ("HOST".into(), EnvVarKind::Literal("127.0.0.1".into())),
-                                ("PORT".into(), EnvVarKind::Literal("9090".into())),
+                                (var1_key.into(), EnvVarKind::Literal(var1_val2.into())),
+                                (var2_key.into(), EnvVarKind::Literal(var2_val.into())),
+                                (var3_key.into(), EnvVarKind::Literal(var3_val.into())),
                             ]),
                         };
+                        let cfg = res.unwrap();
                         assert_eq!(cfg, expected_cfg);
                     },
                 );
             }
 
-            #[inline]
-            fn test<A: Fn(&Context, Result<Config>)>(params: Parameters, assert_fn: A) {
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<Config>)>(
+                create_params_fn: P,
+                assert_fn: A,
+            ) {
                 let dirpath = tempdir().unwrap().into_path();
-                let cfg_filepath1 = dirpath.join("projectctl1.yml");
-                let cfg_filepath2 = dirpath.join("projectctl2.yml");
-                write(&cfg_filepath1, params.cfg_file_content1).unwrap();
-                write(&cfg_filepath2, params.cfg_file_content2).unwrap();
-                let fs = StubFileSystem::new().with_stub_of_open({
-                    let cfg_filepath1 = cfg_filepath1.clone();
-                    let cfg_filepath2 = cfg_filepath2.clone();
-                    move |i, path, opts| {
-                        if i == 0 {
-                            assert_eq!(path, cfg_filepath1);
-                        } else if i == 1 {
-                            assert_eq!(path, cfg_filepath2);
-                        } else {
-                            panic!("unexpected invocation of open");
-                        }
-                        opts.open(path).map_err(Error::IO)
-                    }
-                });
-                let loader = DefaultConfigLoader { fs: Box::new(fs) };
-                let res = loader.load(&[cfg_filepath1.clone(), cfg_filepath2]);
                 let ctx = Context {
-                    cfg_filepath1: &cfg_filepath1,
+                    cfg1_filepath: dirpath.join("cfg1.yml"),
+                    cfg2_filepath: dirpath.join("cfg2.yml"),
                 };
+                let params = create_params_fn(&ctx);
+                write(&ctx.cfg1_filepath, params.cfg1_content).unwrap();
+                write(&ctx.cfg2_filepath, params.cfg2_content).unwrap();
+                let loader = DefaultConfigLoader {
+                    fs: Box::new(DefaultFileSystem),
+                };
+                let res = loader.load(&[&ctx.cfg1_filepath, &ctx.cfg2_filepath]);
                 assert_fn(&ctx, res);
             }
         }
