@@ -66,7 +66,7 @@ impl LiquidRenderer {
                 } else if path.is_file() {
                     if let Some(ext) = path.extension() {
                         if ext == LIQUID_EXTENSION {
-                            debug!("Parsing {} as Liquid template", path.display());
+                            trace!("Parsing {} as Liquid template", path.display());
                             let tpl = parser.parse_file(&path).map_err(|cause| Error::Liquid {
                                 cause,
                                 src: LiquidErrorSource::File(path.to_path_buf()),
@@ -80,7 +80,7 @@ impl LiquidRenderer {
                                     .write(true)
                                     .to_owned(),
                             )?;
-                            debug!("Rendering into {}", dest.display());
+                            debug!("Rendering {} into {}", path.display(), dest.display());
                             tpl.render_to(&mut file, obj)
                                 .map_err(|cause| Error::Liquid {
                                     cause,

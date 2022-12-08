@@ -1,12 +1,16 @@
 use std::{
+    collections::BTreeSet,
     fmt::{self, Debug, Formatter},
+    fs::OpenOptions,
+    io::{self, Write},
     path::Path,
 };
 
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 
 use crate::{
     cli::NewCommandArguments,
+    consts::LOCAL_CONFIG_FILENAME,
     err::Error,
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
@@ -22,6 +26,9 @@ const NAME_VAR_NAME: &str = "name";
 
 const GIT_USER_EMAIL_CONFIG_KEY: &str = "user.email";
 const GIT_USER_NAME_CONFIG_KEY: &str = "user.name";
+
+const GITIGNORE_FILENAME: &str = ".gitignore";
+const FILENAMES_TO_IGNORE: [&str; 1] = [LOCAL_CONFIG_FILENAME];
 
 pub struct NewCommand {
     args: NewCommandArguments,
@@ -66,12 +73,12 @@ impl NewCommand {
         };
         let git_ref = self
             .args
-            .git_branch
+            .tpl_repo_branch
             .map(Reference::Branch)
-            .or_else(|| self.args.git_tag.map(Reference::Tag));
+            .or_else(|| self.args.tpl_repo_tag.map(Reference::Tag));
         let res = self
             .git
-            .checkout_repository(&self.args.git, git_ref, &tpl_repo_path)
+            .checkout_repository(&self.args.tpl_repo_url, git_ref, &tpl_repo_path)
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
@@ -88,8 +95,14 @@ impl NewCommand {
             });
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
         if res.is_ok() {
+            info!("Initializing git repository");
             if let Err(err) = self.git.init(&dest) {
                 warn!("{}", err);
+            }
+            if !self.args.skip_gitignore_update {
+                if let Err(err) = Self::update_gitignore(&dest, self.fs.as_ref()) {
+                    warn!("{}", err);
+                }
             }
         } else {
             Self::delete_dir(&dest, self.fs.as_ref());
@@ -151,6 +164,51 @@ impl NewCommand {
             );
         }
     }
+
+    #[inline]
+    fn update_gitignore(dest: &Path, fs: &dyn FileSystem) -> Result {
+        info!("Updating gitignore");
+        let gitignore_path = dest.join(GITIGNORE_FILENAME);
+        let mut filenames_to_ignore = BTreeSet::from_iter(FILENAMES_TO_IGNORE);
+        let has_trailing_new_line = if gitignore_path.exists() {
+            let content = fs.read_to_string(&gitignore_path)?;
+            for line in content.lines() {
+                if filenames_to_ignore.remove(line.trim()) {
+                    trace!("gitignore already contains `{}`", line);
+                }
+            }
+            content.ends_with('\n')
+        } else {
+            true
+        };
+        let mut gitignore_file = fs.open(
+            &gitignore_path,
+            OpenOptions::new()
+                .append(true)
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .to_owned(),
+        )?;
+        if !has_trailing_new_line {
+            writeln!(&mut gitignore_file).map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to write into {}: {}", gitignore_path.display(), err),
+                ))
+            })?;
+        }
+        for filename in filenames_to_ignore {
+            writeln!(&mut gitignore_file, "{}", filename).map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to write into {}: {}", gitignore_path.display(), err),
+                ))
+            })?;
+            debug!("`{}` added to gitignore", filename);
+        }
+        Ok(())
+    }
 }
 
 impl Debug for NewCommand {
@@ -165,7 +223,7 @@ impl Debug for NewCommand {
 mod test {
     use std::{
         collections::HashMap,
-        fs::{create_dir_all, remove_dir_all},
+        fs::{create_dir_all, read_to_string, remove_dir_all, write},
         io::{self},
         path::PathBuf,
     };
@@ -212,11 +270,14 @@ mod test {
             struct Parameters {
                 args: NewCommandArguments,
                 fail_cwd: bool,
+                fail_dir_deletion: bool,
                 fail_git_checking_out: bool,
                 fail_git_default_value_retrieving: bool,
-                fail_dir_deletion: bool,
                 fail_git_init: bool,
-                fail_redering: bool,
+                fail_open: bool,
+                fail_read_to_string: bool,
+                fail_rendering: bool,
+                gitignore_content: Option<String>,
             }
 
             #[test]
@@ -233,7 +294,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: false,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |_| Expected {
                         dest: dest.clone(),
@@ -261,7 +325,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: true,
                         fail_git_init: false,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -292,7 +359,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: false,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -324,7 +394,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: false,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -355,7 +428,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: false,
-                        fail_redering: true,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: true,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -389,7 +465,10 @@ mod test {
                         fail_git_default_value_retrieving: true,
                         fail_git_checking_out: false,
                         fail_git_init: false,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -400,6 +479,9 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
+                        let expected_gitignore_content =
+                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
+                        assert_gitignore(&dest, &expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -416,7 +498,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: true,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -431,6 +516,80 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
+                        let expected_gitignore_content =
+                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
+                        assert_gitignore(&dest, &expected_gitignore_content);
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_gitignore_opening_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_open: true,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert!(!dest.join(GITIGNORE_FILENAME).exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_gitignore_reading_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let expected_gitignore_content = "node_modules";
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_open: false,
+                        fail_read_to_string: true,
+                        fail_rendering: false,
+                        gitignore_content: Some(expected_gitignore_content.into()),
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert_gitignore(&dest, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -449,10 +608,11 @@ mod test {
                         args: NewCommandArguments {
                             desc: Some(desc.into()),
                             dest: Some(dest.clone()),
-                            git: tpl_repo_url.into(),
-                            git_branch: Some(tpl_repo_branch.into()),
-                            git_tag: None,
+                            tpl_repo_url: tpl_repo_url.into(),
+                            tpl_repo_branch: Some(tpl_repo_branch.into()),
+                            tpl_repo_tag: None,
                             name: ctx.name.into(),
+                            skip_gitignore_update: true,
                             tpl: ctx.tpl.into(),
                             vars: vec![
                                 (var_key.into(), format!("{}2", var_val)),
@@ -464,7 +624,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: true,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest.clone(),
@@ -480,6 +643,7 @@ mod test {
                     |ctx, res| {
                         res.unwrap();
                         assert!(dest.exists());
+                        assert!(!dest.join(GITIGNORE_FILENAME).exists());
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -492,7 +656,7 @@ mod test {
                 test(
                     |ctx| Parameters {
                         args: NewCommandArguments {
-                            git_tag: Some(tpl_repo_tag.into()),
+                            tpl_repo_tag: Some(tpl_repo_tag.into()),
                             ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
                         fail_cwd: false,
@@ -500,7 +664,10 @@ mod test {
                         fail_git_default_value_retrieving: false,
                         fail_git_checking_out: false,
                         fail_git_init: true,
-                        fail_redering: false,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -515,9 +682,100 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
+                        let expected_gitignore_content =
+                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
+                        assert_gitignore(&dest, &expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
+            }
+
+            #[test]
+            fn ok_when_gitignore_exists() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let tpl_repo_tag = "0.1.0";
+                let gitignore_content = "node_modules";
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments {
+                            tpl_repo_tag: Some(tpl_repo_tag.into()),
+                            ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
+                        },
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: true,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: Some(gitignore_content.into()),
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        let ignore_lines_appended = FILENAMES_TO_IGNORE.join("\n");
+                        let expected_gitignore_content =
+                            format!("{}\n{}\n", gitignore_content, ignore_lines_appended);
+                        assert_gitignore(&dest, &expected_gitignore_content);
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_gitignore_contains_one_of_files_to_ignore() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let tpl_repo_tag = "0.1.0";
+                let gitignore_content = format!("{} \n", FILENAMES_TO_IGNORE[0]);
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments {
+                            tpl_repo_tag: Some(tpl_repo_tag.into()),
+                            ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
+                        },
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: true,
+                        fail_open: false,
+                        fail_read_to_string: false,
+                        fail_rendering: false,
+                        gitignore_content: Some(gitignore_content.clone()),
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert_gitignore(&dest, &gitignore_content);
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            fn assert_gitignore(dest: &Path, expected_content: &str) {
+                let gitignore_content = read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
+                assert_eq!(gitignore_content, expected_content);
             }
 
             fn test<
@@ -562,10 +820,32 @@ mod test {
                         } else {
                             remove_dir_all(path).map_err(Error::IO)
                         }
+                    })
+                    .with_stub_of_open({
+                        let dest = expected.dest.clone();
+                        move |_, path, opts| {
+                            assert_eq!(path, dest.join(GITIGNORE_FILENAME));
+                            if params.fail_open {
+                                Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            } else {
+                                opts.open(path).map_err(Error::IO)
+                            }
+                        }
+                    })
+                    .with_stub_of_read_to_string({
+                        let dest = expected.dest.clone();
+                        move |_, path| {
+                            assert_eq!(path, dest.join(GITIGNORE_FILENAME));
+                            if params.fail_read_to_string {
+                                Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            } else {
+                                read_to_string(path).map_err(Error::IO)
+                            }
+                        }
                     });
                 let git = StubGit::new()
                     .with_stub_of_checkout_repository({
-                        let expected_url = params.args.git.clone();
+                        let expected_url = params.args.tpl_repo_url.clone();
                         let tpl_repo_path = ctx.tpl_repo_path.clone();
                         move |_, url, reference, dest| {
                             assert_eq!(url, expected_url);
@@ -613,12 +893,15 @@ mod test {
                         assert_eq!(tpl_dirpath, tpl_repo_path.join(&tpl));
                         assert_eq!(dest, expected_dest);
                         assert_eq!(vars, expected.vars);
-                        if params.fail_redering {
+                        if params.fail_rendering {
                             Err(Error::Liquid {
                                 cause: liquid::Error::with_msg("error"),
                                 src: LiquidErrorSource::Filename("test".into()),
                             })
                         } else {
+                            if let Some(ref content) = params.gitignore_content {
+                                write(dest.join(GITIGNORE_FILENAME), content).unwrap();
+                            }
                             Ok(())
                         }
                     }
