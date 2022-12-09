@@ -1,6 +1,6 @@
 [package]
 name = "projectctl"
-version = "0.2.0-dev"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "CLI tool to manage project"
@@ -8,6 +8,7 @@ authors = ["Guillaume Leroy <pro.guillaume.leroy>"]
 repository = "https://github.com/leroyguillaume/projectctl"
 categories = ["command-line-utilities"]
 keywords = ["templating", "project", "lifecycle"]
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -27,3 +28,8 @@ tempfile = "3.3"
 
 [dev-dependencies]
 stub_trait = "1.0"
+
+[build-dependencies]
+git2 = "0.15"
+openssl = { version = "0.10", features = ["vendored"] }
+regex = "1.7"
