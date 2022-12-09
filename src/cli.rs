@@ -116,34 +116,40 @@ pub struct NewCommandArguments {
     #[clap(help = "Destination directory", index = 3, name = "DIR")]
     pub dest: Option<PathBuf>,
 
+    #[clap(help = "Name of the project to create", index = 2)]
+    pub name: String,
+
     #[clap(
-        default_value = DEFAULT_TPL_GIT_REPO_URL,
-        help = "URL to git repository that contains templates",
-        long,
-        name = "URL"
+        help = "Don't update gitignore if it doesn't contain projectctl files",
+        long = "skip-gitignore"
     )]
-    pub git: String,
+    pub skip_gitignore_update: bool,
+
+    #[clap(help = "Name of the template to use", index = 1, name = "TEMPLATE")]
+    pub tpl: String,
 
     #[clap(
         help = "Name of the branch of the git repository to checkout",
-        long,
+        long = "git-branch",
         name = "BRANCH"
     )]
-    pub git_branch: Option<String>,
+    pub tpl_repo_branch: Option<String>,
 
     #[clap(
         conflicts_with = "BRANCH",
         help = "Name of the tag of the git repository to checkout",
-        long,
+        long = "git-tag",
         name = "TAG"
     )]
-    pub git_tag: Option<String>,
+    pub tpl_repo_tag: Option<String>,
 
-    #[clap(help = "Name of the project to create", index = 2)]
-    pub name: String,
-
-    #[clap(help = "Name of the template to use", index = 1, name = "TEMPLATE")]
-    pub tpl: String,
+    #[clap(
+        default_value = DEFAULT_TPL_GIT_REPO_URL,
+        help = "URL to git repository that contains templates",
+        long = "git",
+        name = "URL"
+    )]
+    pub tpl_repo_url: String,
 
     #[clap(
         help = "Define custom variable",
@@ -161,10 +167,11 @@ impl NewCommandArguments {
         Self {
             desc: None,
             dest: None,
-            git: DEFAULT_TPL_GIT_REPO_URL.into(),
-            git_branch: None,
-            git_tag: None,
+            tpl_repo_url: DEFAULT_TPL_GIT_REPO_URL.into(),
+            tpl_repo_branch: None,
+            tpl_repo_tag: None,
             name,
+            skip_gitignore_update: false,
             tpl,
             vars: vec![],
         }

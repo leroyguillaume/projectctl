@@ -1,6 +1,6 @@
 use std::{
     env::current_dir,
-    fs::{copy, create_dir_all, remove_dir_all, DirEntry, File, OpenOptions},
+    fs::{copy, create_dir_all, read_to_string, remove_dir_all, DirEntry, File, OpenOptions},
     io,
     path::{Path, PathBuf},
 };
@@ -29,6 +29,8 @@ pub trait FileSystem {
     fn open(&self, path: &Path, opts: OpenOptions) -> Result<File>;
 
     fn read_dir(&self, path: &Path) -> Result<Box<DirEntries>>;
+
+    fn read_to_string(&self, path: &Path) -> Result<String>;
 }
 
 pub struct DefaultFileSystem;
@@ -113,5 +115,15 @@ impl FileSystem for DefaultFileSystem {
                     format!("Unable to read directory {}: {}", path.display(), err),
                 ))
             })
+    }
+
+    fn read_to_string(&self, path: &Path) -> Result<String> {
+        debug!("Reading file {}", path.display());
+        read_to_string(path).map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to read {}: {}", path.display(), err),
+            ))
+        })
     }
 }
