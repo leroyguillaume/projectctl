@@ -139,36 +139,34 @@ mod test {
         mod render_recursively {
             use super::*;
 
-            struct Context<'a> {
-                dest: &'a Path,
-                src_dirname: &'a Path,
-                static_file_content: &'a str,
-                static_filename: &'a Path,
-                tpl_dirpath: &'a Path,
-                templated_filename: &'a Path,
-                var_key: &'a str,
+            struct Context {
+                dest: PathBuf,
+                static_filename: &'static Path,
+                tpl_dirpath: PathBuf,
+                tpled_filename: PathBuf,
             }
 
             struct Parameters {
-                project_dirname: PathBuf,
-                templated_file_content: String,
-                vars: Vars,
+                files_content: String,
+                tpled_dirname: PathBuf,
+                vars: HashMap<String, String>,
             }
 
             #[test]
-            fn err_if_parse_filename_failed() {
-                let project_dirname_fn =
-                    |var_key: &str| PathBuf::from(format!("{{{{{} | min}}}}", var_key));
+            fn err_when_filename_parsing_failed() {
+                let var_key = "VAR";
+                let var_val = "VAL";
+                let tpled_dirname = PathBuf::from(format!("{{{{{} | min}}}}", var_key));
                 test(
-                    |ctx| Parameters {
-                        project_dirname: project_dirname_fn(ctx.var_key),
-                        templated_file_content: ctx.static_file_content.into(),
-                        vars: Vars::from_iter(vec![(ctx.var_key.into(), "test".into())]),
+                    |_| Parameters {
+                        files_content: format!("{{{{{}}}}}", var_key),
+                        tpled_dirname: tpled_dirname.clone(),
+                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
                     },
-                    |ctx, res| match res.unwrap_err() {
+                    |_, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
                             LiquidErrorSource::Filename(filename) => {
-                                assert_eq!(filename, project_dirname_fn(ctx.var_key))
+                                assert_eq!(filename, tpled_dirname)
                             }
                             src => panic!("expected Filename (actual: {:?})", src),
                         },
@@ -178,19 +176,20 @@ mod test {
             }
 
             #[test]
-            fn err_if_render_filename_failed() {
-                let project_dirname_fn =
-                    |var_key: &str| PathBuf::from(format!("{{{{{}2}}}}", var_key));
+            fn err_when_filename_rendering_failed() {
+                let var_key = "VAR";
+                let var_val = "VAL";
+                let tpled_dirname = PathBuf::from(format!("{{{{{}2}}}}", var_key));
                 test(
-                    |ctx| Parameters {
-                        project_dirname: project_dirname_fn(ctx.var_key),
-                        templated_file_content: ctx.static_file_content.into(),
-                        vars: Vars::from_iter(vec![(ctx.var_key.into(), "test".into())]),
+                    |_| Parameters {
+                        files_content: format!("{{{{{}}}}}", var_key),
+                        tpled_dirname: tpled_dirname.clone(),
+                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
                     },
-                    |ctx, res| match res.unwrap_err() {
+                    |_, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
                             LiquidErrorSource::Filename(filename) => {
-                                assert_eq!(filename, project_dirname_fn(ctx.var_key))
+                                assert_eq!(filename, tpled_dirname)
                             }
                             src => panic!("expected Filename (actual: {:?})", src),
                         },
@@ -200,26 +199,29 @@ mod test {
             }
 
             #[test]
-            fn err_if_parse_file_failed() {
-                let project_dirname_fn =
-                    |var_key: &str| PathBuf::from(format!("{{{{{}}}}}", var_key));
+            fn err_when_file_parsing_failed() {
+                let var_key = "VAR";
+                let var_val = "VAL";
+                let tpled_dirname = PathBuf::from(format!("{{{{{}}}}}", var_key));
                 test(
-                    |ctx| Parameters {
-                        project_dirname: project_dirname_fn(ctx.var_key),
-                        templated_file_content: "{{ | min }}".into(),
-                        vars: Vars::from_iter(vec![(ctx.var_key.into(), "test".into())]),
+                    {
+                        let tpled_dirname = tpled_dirname.clone();
+                        move |_| Parameters {
+                            files_content: format!("{{{{{} | min}}}}", var_key),
+                            tpled_dirname: tpled_dirname.clone(),
+                            vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                        }
                     },
                     |ctx, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
                             LiquidErrorSource::File(path) => {
                                 let expected_path = ctx
                                     .tpl_dirpath
-                                    .join(project_dirname_fn(ctx.var_key))
-                                    .join(ctx.src_dirname)
-                                    .join(ctx.templated_filename);
+                                    .join(&tpled_dirname)
+                                    .join(&ctx.tpled_filename);
                                 assert_eq!(path, expected_path);
                             }
-                            src => panic!("expected File (actual: {:?})", src),
+                            src => panic!("expected Filename (actual: {:?})", src),
                         },
                         err => panic!("expected Liquid (actual: {:?})", err),
                     },
@@ -227,26 +229,29 @@ mod test {
             }
 
             #[test]
-            fn err_if_render_file_failed() {
-                let project_dirname_fn =
-                    |var_key: &str| PathBuf::from(format!("{{{{{}}}}}", var_key));
+            fn err_when_file_rendering_failed() {
+                let var_key = "VAR";
+                let var_val = "VAL";
+                let tpled_dirname = PathBuf::from(format!("{{{{{}}}}}", var_key));
                 test(
-                    |ctx| Parameters {
-                        project_dirname: project_dirname_fn(ctx.var_key),
-                        templated_file_content: format!("{{{{{}2}}}}", ctx.var_key),
-                        vars: Vars::from_iter(vec![(ctx.var_key.into(), "test".into())]),
+                    {
+                        let tpled_dirname = tpled_dirname.clone();
+                        move |_| Parameters {
+                            files_content: format!("{{{{{}2}}}}", var_key),
+                            tpled_dirname: tpled_dirname.clone(),
+                            vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                        }
                     },
                     |ctx, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
                             LiquidErrorSource::File(path) => {
                                 let expected_path = ctx
                                     .tpl_dirpath
-                                    .join(project_dirname_fn(ctx.var_key))
-                                    .join(ctx.src_dirname)
-                                    .join(ctx.templated_filename);
+                                    .join(&tpled_dirname)
+                                    .join(&ctx.tpled_filename);
                                 assert_eq!(path, expected_path);
                             }
-                            src => panic!("expected File (actual: {:?})", src),
+                            src => panic!("expected Filename (actual: {:?})", src),
                         },
                         err => panic!("expected Liquid (actual: {:?})", err),
                     },
@@ -255,66 +260,52 @@ mod test {
 
             #[test]
             fn ok() {
-                let var_val = "test";
+                let var_key = "VAR";
+                let var_val = "VAL";
+                let files_content = format!("{{{{{}}}}}", var_key);
                 test(
-                    |ctx| Parameters {
-                        project_dirname: format!("{{{{{}}}}}", ctx.var_key).into(),
-                        templated_file_content: ctx.static_file_content.into(),
-                        vars: Vars::from_iter(vec![(ctx.var_key.into(), var_val.into())]),
+                    |_| Parameters {
+                        files_content: files_content.clone(),
+                        tpled_dirname: PathBuf::from(format!("{{{{{}}}}}", var_key)),
+                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
                     },
                     |ctx, res| {
                         res.unwrap();
-                        assert!(!ctx.dest.join(GIT_DIRNAME).exists());
-                        let project_src_dirpath = ctx.dest.join(var_val).join(ctx.src_dirname);
-                        let static_filepath = project_src_dirpath.join(ctx.static_filename);
+                        let dirpath = ctx.dest.join(var_val);
+                        let static_filepath = dirpath.join(ctx.static_filename);
                         let static_file_content = read_to_string(&static_filepath).unwrap();
-                        assert_eq!(static_file_content, ctx.static_file_content);
-                        let templated_filepath = project_src_dirpath.join(var_val);
-                        let templated_file_content = read_to_string(&templated_filepath).unwrap();
-                        assert_eq!(templated_file_content, var_val);
+                        assert_eq!(static_file_content, files_content);
+                        let tpled_filepath = dirpath.join(ctx.tpled_filename.with_extension(""));
+                        let tpled_file_content = read_to_string(&tpled_filepath).unwrap();
+                        assert_eq!(tpled_file_content, var_val);
+                        assert!(!ctx.dest.join(GIT_DIRNAME).exists());
                     },
                 );
             }
 
-            #[inline]
-            fn test<D: Fn(&Context) -> Parameters, A: Fn(&Context, Result)>(
-                data_from_fn: D,
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result)>(
+                create_params_fn: P,
                 assert_fn: A,
             ) {
-                let dest = tempdir().unwrap().into_path();
-                let tpl_dirpath = tempdir().unwrap().into_path();
-                Repository::init(&tpl_dirpath).unwrap();
-                let static_filename = Path::new("static");
-                let var_key = "name";
-                let static_file_content = format!("{{{{{}}}}}", var_key);
-                let templated_filename =
-                    PathBuf::from(format!("{{{{{}}}}}.{}", var_key, LIQUID_EXTENSION));
                 let ctx = Context {
-                    dest: &dest,
-                    src_dirname: Path::new("src"),
-                    static_file_content: &static_file_content,
-                    static_filename,
-                    tpl_dirpath: &tpl_dirpath,
-                    templated_filename: &templated_filename,
-                    var_key,
+                    dest: tempdir().unwrap().into_path(),
+                    static_filename: Path::new("static"),
+                    tpl_dirpath: tempdir().unwrap().into_path(),
+                    tpled_filename: format!("templated.{}", LIQUID_EXTENSION).into(),
                 };
-                let params = data_from_fn(&ctx);
-                let project_src_rel_dirpath = params.project_dirname.join(ctx.src_dirname);
-                let project_src_dirpath = tpl_dirpath.join(&project_src_rel_dirpath);
-                create_dir_all(&project_src_dirpath).unwrap();
-                let static_rel_filepath = project_src_rel_dirpath.join("static");
-                let static_filepath = tpl_dirpath.join(&static_rel_filepath);
-                write(&static_filepath, &static_file_content).unwrap();
-                let templated_rel_filepath = project_src_rel_dirpath.join(ctx.templated_filename);
-                let templated_filepath = tpl_dirpath.join(&templated_rel_filepath);
-                write(&templated_filepath, params.templated_file_content).unwrap();
+                let params = create_params_fn(&ctx);
+                let tpled_dirpath = ctx.tpl_dirpath.join(params.tpled_dirname);
+                let static_filepath = tpled_dirpath.join(ctx.static_filename);
+                let tpled_filepath = tpled_dirpath.join(&ctx.tpled_filename);
+                create_dir_all(&tpled_dirpath).unwrap();
+                write(&static_filepath, &params.files_content).unwrap();
+                write(&tpled_filepath, &params.files_content).unwrap();
+                Repository::init(&ctx.tpl_dirpath).unwrap();
                 let renderer = LiquidRenderer {
                     fs: Box::new(DefaultFileSystem),
                 };
-                assert_fn(
-                    &ctx,
-                    renderer.render_recursively(&tpl_dirpath, &dest, params.vars),
-                );
+                let res = renderer.render_recursively(&ctx.tpl_dirpath, &ctx.dest, params.vars);
+                assert_fn(&ctx, res);
             }
         }
     }

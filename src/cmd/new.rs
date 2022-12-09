@@ -164,7 +164,8 @@ impl Debug for NewCommand {
 #[cfg(test)]
 mod test {
     use std::{
-        fs::{create_dir_all, remove_dir_all, File},
+        collections::HashMap,
+        fs::{create_dir_all, remove_dir_all},
         io::{self},
         path::PathBuf,
     };
@@ -172,9 +173,7 @@ mod test {
     use git2::Repository;
     use tempfile::tempdir;
 
-    use crate::{
-        cli::DEFAULT_TPL_GIT_REPO_URL, fs::StubFileSystem, git::StubGit, renderer::StubRenderer,
-    };
+    use crate::{err::LiquidErrorSource, fs::StubFileSystem, git::StubGit, renderer::StubRenderer};
 
     use super::*;
 
@@ -186,7 +185,7 @@ mod test {
 
             #[test]
             fn cmd() {
-                let args = NewCommandArguments::default_for_test();
+                let args = NewCommandArguments::new("test".into(), "my-project".into());
                 let cmd = NewCommand::new(args.clone());
                 assert_eq!(cmd.args, args);
             }
@@ -195,69 +194,53 @@ mod test {
         mod run {
             use super::*;
 
-            type CheckoutRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
-            type CWDFn = dyn Fn() -> io::Result<()>;
-            type DefaultGitConfigValueFn = dyn Fn() -> std::result::Result<(), git2::Error>;
-            type InitRepositoryFn = dyn Fn() -> std::result::Result<(), git2::Error>;
-            type RenderRecursivelyFn = dyn Fn() -> Result;
-            type TempdirFn = dyn Fn() -> io::Result<()>;
-
-            struct Context<'a> {
-                cwd: &'a Path,
-                git_email: &'a str,
-                git_username: &'a str,
-                tpl: &'a str,
-                tpl_repo_path: &'a Path,
+            struct Context {
+                cwd: PathBuf,
+                git_email: &'static str,
+                git_username: &'static str,
+                name: &'static str,
+                tpl: &'static str,
+                tpl_repo_path: PathBuf,
             }
 
-            struct Data {
+            struct Expected {
                 dest: PathBuf,
-                params: Parameters,
-                vars: Vars,
+                git_ref: Option<Reference>,
+                vars: HashMap<String, String>,
             }
 
             struct Parameters {
                 args: NewCommandArguments,
-                checkout_repo_fn: Box<CheckoutRepositoryFn>,
-                cwd_fn: Box<CWDFn>,
-                default_git_cfg_value_fn: Box<DefaultGitConfigValueFn>,
-                git_ref: Option<Reference>,
-                init_repo_fn: Box<InitRepositoryFn>,
-                render_recursively_fn: Box<RenderRecursivelyFn>,
-                tempdir_fn: Box<TempdirFn>,
+                fail_cwd: bool,
+                fail_git_checking_out: bool,
+                fail_git_default_value_retrieving: bool,
+                fail_dir_deletion: bool,
+                fail_git_init: bool,
+                fail_redering: bool,
             }
 
             #[test]
-            fn dest_dir_already_exists_err() {
+            fn err_when_dest_already_exists() {
+                let dest = tempdir().unwrap().into_path();
                 test(
-                    move |ctx| {
-                        let name = "test";
-                        let dest = ctx.cwd.join(name);
-                        File::create(&dest).unwrap();
-                        Data {
-                            params: Parameters {
-                                args: NewCommandArguments {
-                                    name: name.into(),
-                                    tpl: ctx.tpl.into(),
-                                    ..NewCommandArguments::default_for_test()
-                                },
-                                checkout_repo_fn: Box::new(|| Ok(())),
-                                cwd_fn: Box::new(|| Ok(())),
-                                default_git_cfg_value_fn: Box::new(|| Ok(())),
-                                git_ref: None,
-                                init_repo_fn: Box::new(|| Ok(())),
-                                render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(|| Ok(())),
-                            },
-                            dest,
-                            vars: Vars::from_iter(vec![
-                                (NAME_VAR_NAME.into(), name.into()),
-                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            ]),
-                        }
+                    |ctx| Parameters {
+                        args: NewCommandArguments {
+                            dest: Some(dest.clone()),
+                            ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
+                        },
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_redering: false,
                     },
-                    |_, dest, res| match res.unwrap_err() {
+                    |_| Expected {
+                        dest: dest.clone(),
+                        git_ref: None,
+                        vars: HashMap::new(),
+                    },
+                    |_, res| match res.unwrap_err() {
                         Error::DestinationDirectoryAlreadyExists(path) => assert_eq!(path, dest),
                         err => panic!(
                             "expected DestinationDirectoryAlreadyExists (actual: {:?})",
@@ -268,436 +251,386 @@ mod test {
             }
 
             #[test]
-            fn err_if_tempdir_failed() {
+            fn err_when_checkout_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
-                    move |ctx| {
-                        let name = "test";
-                        Data {
-                            params: Parameters {
-                                args: NewCommandArguments {
-                                    name: name.into(),
-                                    tpl: ctx.tpl.into(),
-                                    ..NewCommandArguments::default_for_test()
-                                },
-                                checkout_repo_fn: Box::new(|| Ok(())),
-                                cwd_fn: Box::new(|| Ok(())),
-                                default_git_cfg_value_fn: Box::new(|| Ok(())),
-                                git_ref: None,
-                                init_repo_fn: Box::new(|| Ok(())),
-                                render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(move || {
-                                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
-                                }),
-                            },
-                            dest: ctx.cwd.join(name),
-                            vars: Vars::from_iter(vec![
-                                (NAME_VAR_NAME.into(), name.into()),
-                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            ]),
-                        }
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: true,
+                        fail_git_init: false,
+                        fail_redering: false,
                     },
-                    |_, dest, res| match res.unwrap_err() {
-                        Error::IO(_) => assert!(!dest.exists()),
-                        err => panic!("expected IO (actual: {:?})", err),
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::new(),
+                    },
+                    |ctx, res| {
+                        match res.unwrap_err() {
+                            Error::Git(_) => (),
+                            err => panic!("expected Git (actual: {:?})", err),
+                        }
+                        let dest = dest_fn(ctx);
+                        assert!(!dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
             }
 
             #[test]
-            fn err_if_checkout_failed() {
+            fn err_when_tpl_does_not_exist() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let tpl_fn = |ctx: &Context| -> String { format!("{}2", ctx.tpl) };
                 test(
-                    move |ctx| {
-                        let name = "test";
-                        Data {
-                            params: Parameters {
-                                args: NewCommandArguments {
-                                    name: name.into(),
-                                    tpl: ctx.tpl.into(),
-                                    ..NewCommandArguments::default_for_test()
-                                },
-                                checkout_repo_fn: Box::new(|| {
-                                    Err(git2::Error::new(
-                                        git2::ErrorCode::Ambiguous,
-                                        git2::ErrorClass::Callback,
-                                        "error",
-                                    ))
-                                }),
-                                cwd_fn: Box::new(|| Ok(())),
-                                default_git_cfg_value_fn: Box::new(|| Ok(())),
-                                git_ref: None,
-                                init_repo_fn: Box::new(|| Ok(())),
-                                render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(|| Ok(())),
-                            },
-                            dest: ctx.cwd.join(name),
-                            vars: Vars::from_iter(vec![
-                                (NAME_VAR_NAME.into(), name.into()),
-                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            ]),
-                        }
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_redering: false,
                     },
-                    |ctx, dest, res| match res.unwrap_err() {
-                        Error::Git(_) => {
-                            assert!(!ctx.tpl_repo_path.exists());
-                            assert!(!dest.exists());
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::new(),
+                    },
+                    |ctx, res| {
+                        let expected_tpl = tpl_fn(ctx);
+                        match res.unwrap_err() {
+                            Error::TemplateNotFound(tpl) => assert_eq!(tpl, expected_tpl),
+                            err => panic!("expected Git (actual: {:?})", err),
                         }
-                        err => panic!("expected Git (actual: {:?})", err),
+                        let dest = dest_fn(ctx);
+                        assert!(!dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
             }
 
             #[test]
-            fn err_if_tpl_not_found() {
-                let expected_tpl = "test";
+            fn err_when_tpl_does_not_exist_and_dir_deletion_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let tpl_fn = |ctx: &Context| -> String { format!("{}2", ctx.tpl) };
                 test(
-                    move |ctx| {
-                        let name = "test";
-                        Data {
-                            params: Parameters {
-                                args: NewCommandArguments {
-                                    name: name.into(),
-                                    tpl: expected_tpl.into(),
-                                    ..NewCommandArguments::default_for_test()
-                                },
-                                checkout_repo_fn: Box::new(|| Ok(())),
-                                cwd_fn: Box::new(|| Ok(())),
-                                default_git_cfg_value_fn: Box::new(|| Ok(())),
-                                git_ref: None,
-                                init_repo_fn: Box::new(|| Ok(())),
-                                render_recursively_fn: Box::new(|| Ok(())),
-                                tempdir_fn: Box::new(|| Ok(())),
-                            },
-                            dest: ctx.cwd.join(name),
-                            vars: Vars::from_iter(vec![
-                                (NAME_VAR_NAME.into(), name.into()),
-                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            ]),
-                        }
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: true,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_redering: false,
                     },
-                    |_, _, res| match res.unwrap_err() {
-                        Error::TemplateNotFound(tpl) => {
-                            assert_eq!(tpl, expected_tpl);
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::new(),
+                    },
+                    |ctx, res| {
+                        let expected_tpl = tpl_fn(ctx);
+                        match res.unwrap_err() {
+                            Error::TemplateNotFound(tpl) => assert_eq!(tpl, expected_tpl),
+                            err => panic!("expected Git (actual: {:?})", err),
                         }
-                        err => panic!("expected TemplateNotFound (actual: {:?})", err),
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert!(ctx.tpl_repo_path.exists());
                     },
                 );
             }
 
             #[test]
-            fn err_if_render_recursively_failed() {
+            fn err_when_rendering_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
-                    move |ctx| {
-                        let name = "test";
-                        Data {
-                            params: Parameters {
-                                args: NewCommandArguments {
-                                    name: name.into(),
-                                    tpl: ctx.tpl.into(),
-                                    ..NewCommandArguments::default_for_test()
-                                },
-                                checkout_repo_fn: Box::new(|| Ok(())),
-                                cwd_fn: Box::new(|| Ok(())),
-                                default_git_cfg_value_fn: Box::new(|| Ok(())),
-                                git_ref: None,
-                                init_repo_fn: Box::new(|| Ok(())),
-                                render_recursively_fn: Box::new(move || {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
-                                }),
-                                tempdir_fn: Box::new(|| Ok(())),
-                            },
-                            dest: ctx.cwd.join(name),
-                            vars: Vars::from_iter(vec![
-                                (NAME_VAR_NAME.into(), name.into()),
-                                (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                                (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            ]),
-                        }
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_redering: true,
                     },
-                    |ctx, dest, res| match res.unwrap_err() {
-                        Error::IO(_) => {
-                            assert!(!ctx.tpl_repo_path.exists());
-                            assert!(!dest.exists());
-                        }
-                        err => panic!("expected IO (actual: {:?})", err),
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_default_args() {
-                ok(move |ctx| {
-                    let name = "test";
-                    Data {
-                        params: Parameters {
-                            args: NewCommandArguments {
-                                name: name.into(),
-                                tpl: ctx.tpl.into(),
-                                ..NewCommandArguments::default_for_test()
-                            },
-                            checkout_repo_fn: Box::new(|| Ok(())),
-                            cwd_fn: Box::new(|| Ok(())),
-                            default_git_cfg_value_fn: Box::new(|| Ok(())),
-                            git_ref: None,
-                            init_repo_fn: Box::new(|| Ok(())),
-                            render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(|| Ok(())),
-                        },
-                        dest: ctx.cwd.join(name),
-                        vars: Vars::from_iter(vec![
-                            (NAME_VAR_NAME.into(), name.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([
                             (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                        ]),
-                    }
-                });
-            }
-
-            #[test]
-            fn ok_when_default_git_config_value_failed() {
-                ok(move |ctx| {
-                    let name = "test";
-                    Data {
-                        params: Parameters {
-                            args: NewCommandArguments {
-                                name: name.into(),
-                                tpl: ctx.tpl.into(),
-                                ..NewCommandArguments::default_for_test()
-                            },
-                            checkout_repo_fn: Box::new(|| Ok(())),
-                            cwd_fn: Box::new(|| Ok(())),
-                            default_git_cfg_value_fn: Box::new(|| {
-                                Err(git2::Error::new(
-                                    git2::ErrorCode::Ambiguous,
-                                    git2::ErrorClass::Callback,
-                                    "error",
-                                ))
-                            }),
-                            git_ref: None,
-                            init_repo_fn: Box::new(|| Ok(())),
-                            render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(|| Ok(())),
-                        },
-                        dest: ctx.cwd.join(name),
-                        vars: Vars::from_iter(vec![(NAME_VAR_NAME.into(), name.into())]),
-                    }
-                });
-            }
-
-            #[test]
-            fn ok_when_init_repo_failed() {
-                ok(move |ctx| {
-                    let name = "test";
-                    Data {
-                        params: Parameters {
-                            args: NewCommandArguments {
-                                name: name.into(),
-                                tpl: ctx.tpl.into(),
-                                ..NewCommandArguments::default_for_test()
-                            },
-                            checkout_repo_fn: Box::new(|| Ok(())),
-                            cwd_fn: Box::new(|| Ok(())),
-                            default_git_cfg_value_fn: Box::new(|| Ok(())),
-                            git_ref: None,
-                            init_repo_fn: Box::new(|| {
-                                Err(git2::Error::new(
-                                    git2::ErrorCode::Ambiguous,
-                                    git2::ErrorClass::Callback,
-                                    "error",
-                                ))
-                            }),
-                            render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(|| Ok(())),
-                        },
-                        dest: ctx.cwd.join(name),
-                        vars: Vars::from_iter(vec![
-                            (NAME_VAR_NAME.into(), name.into()),
                             (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
                         ]),
-                    }
-                });
+                    },
+                    |ctx, res| {
+                        match res.unwrap_err() {
+                            Error::Liquid { .. } => (),
+                            err => panic!("expected Liquid (actual: {:?})", err),
+                        }
+                        let dest = dest_fn(ctx);
+                        assert!(!dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_git_default_value_retrieving_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: true,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_redering: false,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([(NAME_VAR_NAME.into(), ctx.name.into())]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_git_init_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: true,
+                        fail_redering: false,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
             }
 
             #[test]
             fn ok_when_custom_args() {
-                ok(move |ctx| {
-                    let name = "test";
-                    let desc = "test project";
-                    let dest = tempdir().unwrap().into_path().join("test");
-                    let branch = "develop";
-                    let var_key = "myvar";
-                    let var_value = "myvalue";
-                    let git_email = format!("{}2", ctx.git_email);
-                    Data {
-                        params: Parameters {
-                            args: NewCommandArguments {
-                                desc: Some(desc.into()),
-                                dest: Some(dest.clone()),
-                                git: format!("{}2", DEFAULT_TPL_GIT_REPO_URL),
-                                git_branch: Some(branch.into()),
-                                git_tag: None,
-                                name: name.into(),
-                                tpl: ctx.tpl.into(),
-                                vars: vec![
-                                    (var_key.into(), var_value.into()),
-                                    (GIT_USER_EMAIL_VAR_KEY.into(), git_email.clone()),
-                                ],
-                            },
-                            checkout_repo_fn: Box::new(|| Ok(())),
-                            cwd_fn: Box::new(|| Ok(())),
-                            default_git_cfg_value_fn: Box::new(|| Ok(())),
-                            git_ref: Some(Reference::Branch(branch.into())),
-                            init_repo_fn: Box::new(|| Ok(())),
-                            render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(|| Ok(())),
+                let desc = "My wonderful project.";
+                let dest = tempdir().unwrap().into_path().join("test");
+                let tpl_repo_url = "https://my-templates.com";
+                let tpl_repo_branch = "develop";
+                let var_key = "VAR";
+                let var_val = "VAL";
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments {
+                            desc: Some(desc.into()),
+                            dest: Some(dest.clone()),
+                            git: tpl_repo_url.into(),
+                            git_branch: Some(tpl_repo_branch.into()),
+                            git_tag: None,
+                            name: ctx.name.into(),
+                            tpl: ctx.tpl.into(),
+                            vars: vec![
+                                (var_key.into(), format!("{}2", var_val)),
+                                (var_key.into(), var_val.into()),
+                            ],
                         },
-                        dest,
-                        vars: Vars::from_iter(vec![
-                            (NAME_VAR_NAME.into(), name.into()),
-                            (DESCRIPTION_VAR_KEY.into(), desc.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: true,
+                        fail_redering: false,
+                    },
+                    |ctx| Expected {
+                        dest: dest.clone(),
+                        git_ref: Some(Reference::Branch(tpl_repo_branch.into())),
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
                             (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (GIT_USER_EMAIL_VAR_KEY.into(), git_email),
-                            (var_key.into(), var_value.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                            (DESCRIPTION_VAR_KEY.into(), desc.into()),
+                            (var_key.into(), var_val.into()),
                         ]),
-                    }
-                });
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        assert!(dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
             }
 
             #[test]
-            fn ok_when_custom_tag() {
-                ok(move |ctx| {
-                    let name = "test";
-                    let tag = "v1.0.0";
-                    Data {
-                        params: Parameters {
-                            args: NewCommandArguments {
-                                git_tag: Some(tag.into()),
-                                name: name.into(),
-                                tpl: ctx.tpl.into(),
-                                ..NewCommandArguments::default_for_test()
-                            },
-                            checkout_repo_fn: Box::new(|| Ok(())),
-                            cwd_fn: Box::new(|| Ok(())),
-                            default_git_cfg_value_fn: Box::new(|| Ok(())),
-                            git_ref: Some(Reference::Tag(tag.into())),
-                            init_repo_fn: Box::new(|| Ok(())),
-                            render_recursively_fn: Box::new(|| Ok(())),
-                            tempdir_fn: Box::new(|| Ok(())),
+            fn ok_when_tpl_repo_tag_is_some() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                let tpl_repo_tag = "0.1.0";
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments {
+                            git_tag: Some(tpl_repo_tag.into()),
+                            ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
-                        dest: ctx.cwd.join(name),
-                        vars: Vars::from_iter(vec![
-                            (NAME_VAR_NAME.into(), name.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: true,
+                        fail_redering: false,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
+                        vars: HashMap::from_iter([
                             (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
                         ]),
-                    }
-                });
+                    },
+                    |ctx, res| {
+                        res.unwrap();
+                        let dest = dest_fn(ctx);
+                        assert!(dest.exists());
+                        assert!(!ctx.tpl_repo_path.exists());
+                    },
+                );
             }
 
-            #[inline]
-            fn ok<D: Fn(&Context) -> Data>(data_from_fn: D) {
-                test(data_from_fn, |ctx, dest, res| {
-                    res.unwrap();
-                    assert!(dest.exists());
-                    assert!(!ctx.tpl_repo_path.exists());
-                });
-            }
-
-            #[inline]
-            fn test<D: Fn(&Context) -> Data, A: Fn(&Context, &Path, Result)>(
-                data_from_fn: D,
+            fn test<
+                P: Fn(&Context) -> Parameters,
+                E: Fn(&Context) -> Expected,
+                A: Fn(&Context, Result),
+            >(
+                create_params_fn: P,
+                create_expected_fn: E,
                 assert_fn: A,
             ) {
-                let git_username = "Test";
-                let git_email = "test@local";
-                let cwd = tempdir().unwrap().into_path();
-                let tpl_repo_path = tempdir().unwrap().into_path();
-                let tpl = "mytemplate";
-                let expected_tpl_dirpath = tpl_repo_path.join(tpl);
-                create_dir_all(&expected_tpl_dirpath).unwrap();
                 let ctx = Context {
-                    cwd: &cwd,
-                    git_email,
-                    git_username,
-                    tpl,
-                    tpl_repo_path: &tpl_repo_path,
+                    cwd: tempdir().unwrap().into_path(),
+                    name: "my-project",
+                    git_email: "test@local",
+                    git_username: "test",
+                    tpl: "test",
+                    tpl_repo_path: tempdir().unwrap().into_path(),
                 };
-                let data = data_from_fn(&ctx);
+                let params = create_params_fn(&ctx);
+                let expected = create_expected_fn(&ctx);
+                create_dir_all(ctx.tpl_repo_path.join(ctx.tpl)).unwrap();
                 let fs = StubFileSystem::new()
                     .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
                     .with_stub_of_create_temp_dir({
-                        let tpl_repo_path = tpl_repo_path.clone();
-                        move |_| {
-                            (data.params.tempdir_fn)()
-                                .map(|_| tpl_repo_path.clone())
-                                .map_err(Error::IO)
-                        }
+                        let tpl_repo_path = ctx.tpl_repo_path.clone();
+                        move |_| Ok(tpl_repo_path.clone())
                     })
                     .with_stub_of_cwd({
-                        let cwd = cwd.clone();
+                        let cwd = ctx.cwd.clone();
                         move |_| {
-                            (data.params.cwd_fn)()
-                                .map(|_| cwd.clone())
-                                .map_err(Error::IO)
+                            if params.fail_cwd {
+                                Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            } else {
+                                Ok(cwd.clone())
+                            }
                         }
                     })
-                    .with_stub_of_delete_dir(|_, path| remove_dir_all(path).map_err(Error::IO));
+                    .with_stub_of_delete_dir(move |_, path| {
+                        if params.fail_dir_deletion {
+                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                        } else {
+                            remove_dir_all(path).map_err(Error::IO)
+                        }
+                    });
                 let git = StubGit::new()
                     .with_stub_of_checkout_repository({
-                        let expected_url = data.params.args.git.clone();
-                        let tpl_repo_path = tpl_repo_path.clone();
+                        let expected_url = params.args.git.clone();
+                        let tpl_repo_path = ctx.tpl_repo_path.clone();
                         move |_, url, reference, dest| {
                             assert_eq!(url, expected_url);
-                            assert_eq!(reference, data.params.git_ref);
+                            assert_eq!(reference, expected.git_ref);
                             assert_eq!(dest, tpl_repo_path);
-                            (data.params.checkout_repo_fn)()
-                                .map(|_| Repository::init(&tpl_repo_path).unwrap())
-                                .map_err(Error::Git)
+                            if params.fail_git_checking_out {
+                                Err(Error::Git(git2::Error::from_str("error")))
+                            } else {
+                                Repository::init(&tpl_repo_path).map_err(Error::Git)
+                            }
                         }
                     })
                     .with_stub_of_default_config_value(move |i, key| {
                         let val = if i == 0 {
                             assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
-                            git_username
+                            ctx.git_username
                         } else if i == 1 {
                             assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
-                            git_email
+                            ctx.git_email
                         } else {
                             panic!("unexpected key `{}`", key);
                         };
-                        (data.params.default_git_cfg_value_fn)()
-                            .map(|_| val.into())
-                            .map_err(Error::Git)
+                        if params.fail_git_default_value_retrieving {
+                            Err(Error::Git(git2::Error::from_str("error")))
+                        } else {
+                            Ok(val.into())
+                        }
                     })
                     .with_stub_of_init({
-                        let expected_dest = data.dest.clone();
+                        let expected_dest = expected.dest.clone();
                         move |_, path| {
                             assert_eq!(path, expected_dest);
-                            (data.params.init_repo_fn)()
-                                .map(|_| Repository::init(path).unwrap())
-                                .map_err(Error::Git)
+                            if params.fail_git_init {
+                                Err(Error::Git(git2::Error::from_str("error")))
+                            } else {
+                                Repository::init(path).map_err(Error::Git)
+                            }
                         }
                     });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
-                    let expected_dest = data.dest.clone();
-                    let expected_vars = data.vars.clone();
+                    let tpl_repo_path = ctx.tpl_repo_path.clone();
+                    let expected_dest = expected.dest.clone();
+                    let tpl = params.args.tpl.clone();
                     move |_, tpl_dirpath, dest, vars| {
-                        assert_eq!(tpl_dirpath, expected_tpl_dirpath);
+                        assert_eq!(tpl_dirpath, tpl_repo_path.join(&tpl));
                         assert_eq!(dest, expected_dest);
-                        assert_eq!(vars, expected_vars);
-                        (data.params.render_recursively_fn)()
+                        assert_eq!(vars, expected.vars);
+                        if params.fail_redering {
+                            Err(Error::Liquid {
+                                cause: liquid::Error::with_msg("error"),
+                                src: LiquidErrorSource::Filename("test".into()),
+                            })
+                        } else {
+                            Ok(())
+                        }
                     }
                 });
                 let cmd = NewCommand {
-                    args: data.params.args,
+                    args: params.args,
                     fs: Box::new(fs),
                     renderer: Box::new(renderer),
                     git: Box::new(git),
                 };
-                assert_fn(&ctx, &data.dest, cmd.run());
+                let res = cmd.run();
+                assert_fn(&ctx, res);
             }
         }
     }

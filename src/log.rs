@@ -7,6 +7,12 @@ use log::{
     set_boxed_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record, SetLoggerError,
 };
 
+const DEBUG_LABEL: &str = "DEBUG";
+const ERROR_LABEL: &str = "ERROR";
+const INFO_LABEL: &str = "INFO";
+const TRACE_LABEL: &str = "TRACE";
+const WARN_LABEL: &str = "WARN";
+
 const DEBUG_COLOR: (u8, u8, u8) = (193, 193, 193);
 const ERROR_COLOR: (u8, u8, u8) = (255, 0, 0);
 const INFO_COLOR: (u8, u8, u8) = (61, 124, 240);
@@ -14,26 +20,26 @@ const TRACE_COLOR: (u8, u8, u8) = (61, 61, 61);
 const WARN_COLOR: (u8, u8, u8) = (245, 114, 0);
 
 pub struct Logger<W: Write + Send> {
-    lvl: LevelFilter,
+    filter: LevelFilter,
     out: Mutex<W>,
     with_color: bool,
 }
 
 impl Logger<Stderr> {
-    pub fn init(lvl: LevelFilter, with_color: bool) -> Result<(), SetLoggerError> {
+    pub fn init(filter: LevelFilter, with_color: bool) -> Result<(), SetLoggerError> {
         let logger = Self {
-            lvl,
+            filter,
             out: Mutex::new(stderr()),
             with_color,
         };
-        set_max_level(lvl);
+        set_max_level(filter);
         set_boxed_logger(Box::new(logger))
     }
 }
 
 impl<W: Write + Send> Log for Logger<W> {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= self.lvl
+        metadata.level() <= self.filter
     }
 
     fn flush(&self) {}
@@ -41,11 +47,11 @@ impl<W: Write + Send> Log for Logger<W> {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             let (lvl, color) = match record.level() {
-                Level::Debug => ("DEBUG", DEBUG_COLOR),
-                Level::Error => ("ERROR", ERROR_COLOR),
-                Level::Info => ("INFO", INFO_COLOR),
-                Level::Trace => ("TRACE", TRACE_COLOR),
-                Level::Warn => ("WARN", WARN_COLOR),
+                Level::Debug => (DEBUG_LABEL, DEBUG_COLOR),
+                Level::Error => (ERROR_LABEL, ERROR_COLOR),
+                Level::Info => (INFO_LABEL, INFO_COLOR),
+                Level::Trace => (TRACE_LABEL, TRACE_COLOR),
+                Level::Warn => (WARN_LABEL, WARN_COLOR),
             };
             let msg = record.args().to_string();
             for line in msg.lines() {
@@ -68,6 +74,8 @@ impl<W: Write + Send> Log for Logger<W> {
 
 #[cfg(test)]
 mod test {
+    use std::fmt::Arguments;
+
     use super::*;
 
     mod logger {
@@ -76,238 +84,230 @@ mod test {
         mod enabled {
             use super::*;
 
-            macro_rules! test {
-                ($ident:ident, $lvl:expr, $max_lvl:expr, $enabled:literal) => {
-                    #[test]
-                    fn $ident() {
-                        let metadata = Metadata::builder().level($lvl).build();
-                        let logger = Logger {
-                            lvl: $max_lvl,
-                            out: Mutex::new(vec![]),
-                            with_color: false,
-                        };
-                        assert_eq!(logger.enabled(&metadata), $enabled);
-                    }
-                };
+            struct Parameters {
+                filter: LevelFilter,
+                lvl: Level,
             }
 
-            test!(
-                false_if_max_lvl_is_off,
-                Level::Error,
-                LevelFilter::Off,
-                false
-            );
-            test!(
-                false_if_max_lvl_is_lower_than_lvl,
-                Level::Warn,
-                LevelFilter::Error,
-                false
-            );
-            test!(
-                true_if_max_lvl_is_equal_to_lvl,
-                Level::Error,
-                LevelFilter::Error,
-                true
-            );
-            test!(
-                true_if_max_lvl_is_greater_than_lvl,
-                Level::Error,
-                LevelFilter::Warn,
-                true
-            );
+            #[test]
+            fn false_when_filter_is_off() {
+                test(
+                    || Parameters {
+                        lvl: Level::Error,
+                        filter: LevelFilter::Off,
+                    },
+                    |enabled| assert!(!enabled),
+                )
+            }
+
+            #[test]
+            fn false_when_filter_is_lower_than_lvl() {
+                test(
+                    || Parameters {
+                        lvl: Level::Warn,
+                        filter: LevelFilter::Error,
+                    },
+                    |enabled| assert!(!enabled),
+                )
+            }
+
+            #[test]
+            fn true_when_filter_is_equal_to_lvl() {
+                test(
+                    || Parameters {
+                        lvl: Level::Error,
+                        filter: LevelFilter::Error,
+                    },
+                    |enabled| assert!(enabled),
+                )
+            }
+
+            #[test]
+            fn true_when_filter_is_greater_than_lvl() {
+                test(
+                    || Parameters {
+                        lvl: Level::Error,
+                        filter: LevelFilter::Warn,
+                    },
+                    |enabled| assert!(enabled),
+                )
+            }
+
+            fn test<P: Fn() -> Parameters, A: Fn(bool)>(create_params_fn: P, assert_fn: A) {
+                let params = create_params_fn();
+                let metadata = Metadata::builder().level(params.lvl).build();
+                let logger = Logger {
+                    filter: params.filter,
+                    out: Mutex::new(vec![]),
+                    with_color: false,
+                };
+                let enabled = logger.enabled(&metadata);
+                assert_fn(enabled);
+            }
         }
 
         mod log {
             use super::*;
 
-            struct Context<'a> {
-                debug1_msg: &'a str,
-                debug2_msg: &'a str,
-                error1_msg: &'a str,
-                error2_msg: &'a str,
-                info1_msg: &'a str,
-                info2_msg: &'a str,
-                trace1_msg: &'a str,
-                trace2_msg: &'a str,
-                warn1_msg: &'a str,
-                warn2_msg: &'a str,
+            struct Context {
+                args: Arguments<'static>,
             }
 
-            struct Logs<'a> {
-                debug1: &'a str,
-                debug2: &'a str,
-                error1: &'a str,
-                error2: &'a str,
-                info1: &'a str,
-                info2: &'a str,
-                trace1: &'a str,
-                trace2: &'a str,
-                warn1: &'a str,
-                warn2: &'a str,
+            struct Parameters {
+                lvl: Level,
+                with_color: bool,
             }
 
             #[test]
-            fn with_color() {
-                test(true, |ctx, logs| {
-                    assert_eq!(
-                        logs.error1,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[ERROR] {}\x1b[0m",
-                            ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2, ctx.error1_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.error2,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[ERROR] {}\x1b[0m",
-                            ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2, ctx.error2_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.warn1,
-                        format!(
-                            "\x1b[38;2;{};{};{}m [WARN] {}\x1b[0m",
-                            WARN_COLOR.0, WARN_COLOR.1, WARN_COLOR.2, ctx.warn1_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.warn2,
-                        format!(
-                            "\x1b[38;2;{};{};{}m [WARN] {}\x1b[0m",
-                            WARN_COLOR.0, WARN_COLOR.1, WARN_COLOR.2, ctx.warn2_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.info1,
-                        format!(
-                            "\x1b[38;2;{};{};{}m [INFO] {}\x1b[0m",
-                            INFO_COLOR.0, INFO_COLOR.1, INFO_COLOR.2, ctx.info1_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.info2,
-                        format!(
-                            "\x1b[38;2;{};{};{}m [INFO] {}\x1b[0m",
-                            INFO_COLOR.0, INFO_COLOR.1, INFO_COLOR.2, ctx.info2_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.debug1,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[DEBUG] {}\x1b[0m",
-                            DEBUG_COLOR.0, DEBUG_COLOR.1, DEBUG_COLOR.2, ctx.debug1_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.debug2,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[DEBUG] {}\x1b[0m",
-                            DEBUG_COLOR.0, DEBUG_COLOR.1, DEBUG_COLOR.2, ctx.debug2_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.trace1,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[TRACE] {}\x1b[0m",
-                            TRACE_COLOR.0, TRACE_COLOR.1, TRACE_COLOR.2, ctx.trace1_msg
-                        )
-                    );
-                    assert_eq!(
-                        logs.trace2,
-                        format!(
-                            "\x1b[38;2;{};{};{}m[TRACE] {}\x1b[0m",
-                            TRACE_COLOR.0, TRACE_COLOR.1, TRACE_COLOR.2, ctx.trace2_msg
-                        )
-                    );
-                })
+            fn debug_with_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Debug,
+                        with_color: true,
+                    },
+                    |ctx, out| assert_logs(ctx, out, DEBUG_LABEL, Some(DEBUG_COLOR)),
+                );
             }
 
             #[test]
-            fn without_color() {
-                test(false, |ctx, logs| {
-                    assert_eq!(logs.error1, format!("[ERROR] {}", ctx.error1_msg));
-                    assert_eq!(logs.error2, format!("[ERROR] {}", ctx.error2_msg));
-                    assert_eq!(logs.warn1, format!(" [WARN] {}", ctx.warn1_msg));
-                    assert_eq!(logs.warn2, format!(" [WARN] {}", ctx.warn2_msg));
-                    assert_eq!(logs.info1, format!(" [INFO] {}", ctx.info1_msg));
-                    assert_eq!(logs.info2, format!(" [INFO] {}", ctx.info2_msg));
-                    assert_eq!(logs.debug1, format!("[DEBUG] {}", ctx.debug1_msg));
-                    assert_eq!(logs.debug2, format!("[DEBUG] {}", ctx.debug2_msg));
-                    assert_eq!(logs.trace1, format!("[TRACE] {}", ctx.trace1_msg));
-                    assert_eq!(logs.trace2, format!("[TRACE] {}", ctx.trace2_msg));
-                })
+            fn debug_without_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Debug,
+                        with_color: false,
+                    },
+                    |ctx, out| assert_logs(ctx, out, DEBUG_LABEL, None),
+                );
             }
 
-            #[inline]
-            fn test<A: Fn(&Context, &Logs)>(with_color: bool, assert_fn: A) {
-                let error1_msg = "error1";
-                let error2_msg = "error2";
-                let error_record = Record::builder()
-                    .level(Level::Error)
-                    .args(format_args!("error1\nerror2"))
-                    .build();
-                let warn1_msg = "warn1";
-                let warn2_msg = "warn2";
-                let warn_record = Record::builder()
-                    .level(Level::Warn)
-                    .args(format_args!("warn1\nwarn2"))
-                    .build();
-                let info1_msg = "info1";
-                let info2_msg = "info2";
-                let info_record = Record::builder()
-                    .level(Level::Info)
-                    .args(format_args!("info1\ninfo2"))
-                    .build();
-                let debug1_msg = "debug1";
-                let debug2_msg = "debug2";
-                let debug_record = Record::builder()
-                    .level(Level::Debug)
-                    .args(format_args!("debug1\ndebug2"))
-                    .build();
-                let trace1_msg = "trace1";
-                let trace2_msg = "trace2";
-                let trace_record = Record::builder()
-                    .level(Level::Trace)
-                    .args(format_args!("trace1\ntrace2"))
-                    .build();
-                let logger = Logger {
-                    lvl: LevelFilter::Trace,
-                    out: Mutex::new(vec![]),
-                    with_color,
+            #[test]
+            fn error_with_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Error,
+                        with_color: true,
+                    },
+                    |ctx, out| assert_logs(ctx, out, ERROR_LABEL, Some(ERROR_COLOR)),
+                );
+            }
+
+            #[test]
+            fn error_without_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Error,
+                        with_color: false,
+                    },
+                    |ctx, out| assert_logs(ctx, out, ERROR_LABEL, None),
+                );
+            }
+
+            #[test]
+            fn info_with_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Info,
+                        with_color: true,
+                    },
+                    |ctx, out| assert_logs(ctx, out, INFO_LABEL, Some(INFO_COLOR)),
+                );
+            }
+
+            #[test]
+            fn info_without_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Info,
+                        with_color: false,
+                    },
+                    |ctx, out| assert_logs(ctx, out, INFO_LABEL, None),
+                );
+            }
+
+            #[test]
+            fn trace_with_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Trace,
+                        with_color: true,
+                    },
+                    |ctx, out| assert_logs(ctx, out, TRACE_LABEL, Some(TRACE_COLOR)),
+                );
+            }
+
+            #[test]
+            fn trace_without_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Trace,
+                        with_color: false,
+                    },
+                    |ctx, out| assert_logs(ctx, out, TRACE_LABEL, None),
+                );
+            }
+
+            #[test]
+            fn warn_with_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Warn,
+                        with_color: true,
+                    },
+                    |ctx, out| assert_logs(ctx, out, WARN_LABEL, Some(WARN_COLOR)),
+                );
+            }
+
+            #[test]
+            fn warn_without_color() {
+                test(
+                    |_| Parameters {
+                        lvl: Level::Warn,
+                        with_color: false,
+                    },
+                    |ctx, out| assert_logs(ctx, out, WARN_LABEL, None),
+                );
+            }
+
+            fn assert_logs(ctx: &Context, out: String, label: &str, color: Option<(u8, u8, u8)>) {
+                let msg = format!("{}", ctx.args);
+                let lines: Vec<&str> = out.lines().collect();
+                let log_fn = |line: &str| format!("{:>7} {}", format!("[{}]", label), line);
+                let expected_lines: Vec<String> = if let Some(color) = color {
+                    msg.lines()
+                        .map(|line| {
+                            format!(
+                                "\x1b[38;2;{};{};{}m{}\x1b[0m",
+                                color.0,
+                                color.1,
+                                color.2,
+                                log_fn(line)
+                            )
+                        })
+                        .collect()
+                } else {
+                    msg.lines().map(|line| log_fn(line)).collect()
                 };
-                logger.log(&error_record);
-                logger.log(&warn_record);
-                logger.log(&info_record);
-                logger.log(&debug_record);
-                logger.log(&trace_record);
-                let out = logger.out.into_inner().unwrap();
-                let logs = String::from_utf8(out).unwrap();
+                assert_eq!(lines, expected_lines);
+            }
+
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, String)>(
+                create_params_fn: P,
+                assert_fn: A,
+            ) {
                 let ctx = Context {
-                    debug1_msg,
-                    debug2_msg,
-                    error1_msg,
-                    error2_msg,
-                    info1_msg,
-                    info2_msg,
-                    trace1_msg,
-                    trace2_msg,
-                    warn1_msg,
-                    warn2_msg,
+                    args: format_args!("line1\nline2"),
                 };
-                let lines: Vec<&str> = logs.lines().collect();
-                let logs = Logs {
-                    debug1: lines[6],
-                    debug2: lines[7],
-                    error1: lines[0],
-                    error2: lines[1],
-                    info1: lines[4],
-                    info2: lines[5],
-                    trace1: lines[8],
-                    trace2: lines[9],
-                    warn1: lines[2],
-                    warn2: lines[3],
+                let params = create_params_fn(&ctx);
+                let record = Record::builder().level(params.lvl).args(ctx.args).build();
+                let logger = Logger {
+                    filter: LevelFilter::Trace,
+                    out: Mutex::new(vec![]),
+                    with_color: params.with_color,
                 };
-                assert_fn(&ctx, &logs);
+                logger.log(&record);
+                let out = logger.out.into_inner().unwrap();
+                let out = String::from_utf8(out).unwrap();
+                assert_fn(&ctx, out);
             }
         }
     }
