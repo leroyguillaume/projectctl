@@ -15,7 +15,7 @@ const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projec
 const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
 #[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = env!("VERSION"), about, long_about = None)]
 pub struct Arguments {
     #[command(subcommand)]
     pub cmd: CommandArgument,
