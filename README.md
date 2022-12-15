@@ -11,7 +11,7 @@ CLI tool to manage project.
 *Sorry for Mac M1/M2 users, I don't have it so I can't build on this architecture because it's not available on GitHub Actions.*
 
 ```bash
-VERSION=0.1.2
+VERSION=0.2.0
 
 # Linux x64
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-x64
@@ -32,6 +32,11 @@ cargo install projectctl
 ```
 git clone https://github.com/leroyguillaume/projectctl
 cargo install --path projectctl
+```
+
+Then, add the following line to `~/.bashrc` or `~/.zshrc`:
+```bash
+eval "$(projectctl hook)"
 ```
 
 ## Documentation
