@@ -1,0 +1,9 @@
+_projectctl_hook() {
+  if grep ^$(pwd)\$ {{ allowed_dirs_filepath }} > /dev/null 2>&1; then
+    eval $({{ program }} {{ env_cmd }})
+  fi
+}
+
+if ! [[ "${PROMPT_COMMAND:-}" =~ _projectctl_hook ]]; then
+  PROMPT_COMMAND="_projectctl_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+fi

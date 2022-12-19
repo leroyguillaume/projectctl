@@ -7,6 +7,7 @@ mod fs;
 mod git;
 mod log;
 mod renderer;
+mod utils;
 
 use std::{io::stdout, process::exit};
 
@@ -23,6 +24,7 @@ fn main() {
     let mut stdout = stdout();
     let res = match args.into_command_kind() {
         CommandKind::Env(cmd) => cmd.run(&mut stdout),
+        CommandKind::Hook(cmd) => cmd.run(&mut stdout),
         CommandKind::New(cmd) => cmd.run(),
     };
     let rc = match res {

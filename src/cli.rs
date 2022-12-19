@@ -1,18 +1,23 @@
-use std::{
-    error::Error,
-    fmt::{self, Display, Formatter},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use log::LevelFilter;
 use regex::Regex;
 
-use crate::cmd::{env::EnvCommand, new::NewCommand, CommandKind};
+use crate::{
+    cmd::{env::EnvCommand, hook::HookCommand, new::NewCommand, CommandKind},
+    err::{Error, Result},
+};
+
+pub const ENV_COMMAND: &str = "env";
+
+pub const ALLOWED_DIRS_OPT_HELP: &str = "Path to file that contains allowed directories list";
+pub const ALLOWED_DIRS_OPT_LONG: &str = "allowed-dirs";
+pub const ALLOWED_DIRS_OPT_NAME: &str = "ALLOWED DIRS FILE";
+
+pub const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
 const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
-
-const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
 #[derive(Debug, Parser)]
 #[command(author, version = env!("VERSION"), about, long_about = None)]
@@ -28,6 +33,7 @@ impl Arguments {
     pub fn into_command_kind(self) -> CommandKind {
         match self.cmd {
             CommandArgument::Env(args) => CommandKind::Env(Box::new(EnvCommand::new(args))),
+            CommandArgument::Hook(args) => CommandKind::Hook(Box::new(HookCommand::new(args))),
             CommandArgument::New(args) => CommandKind::New(Box::new(NewCommand::new(args))),
         }
     }
@@ -77,8 +83,11 @@ impl LoggingArguments {
 
 #[derive(Debug, Subcommand)]
 pub enum CommandArgument {
-    #[command(about = "Print environment")]
+    #[command(about = "Print environment", name = ENV_COMMAND)]
     Env(EnvCommandArguments),
+
+    #[command(about = "Print shell hook")]
+    Hook(HookCommandArguments),
 
     #[command(about = "Create new project from template")]
     New(NewCommandArguments),
@@ -103,8 +112,34 @@ pub struct EnvCommandArguments {
     pub project_dirpath: Option<PathBuf>,
 }
 
+#[derive(Args, Clone, Debug, Default, Eq, PartialEq)]
+pub struct HookCommandArguments {
+    #[clap(
+        help = ALLOWED_DIRS_OPT_HELP,
+        long = ALLOWED_DIRS_OPT_LONG,
+        name = ALLOWED_DIRS_OPT_NAME
+    )]
+    pub allowed_dirs_filepath: Option<PathBuf>,
+
+    #[clap()]
+    pub shell: Option<HookCommandShellArgument>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum HookCommandShellArgument {
+    Bash,
+    Zsh,
+}
+
 #[derive(Args, Clone, Debug, Eq, PartialEq)]
 pub struct NewCommandArguments {
+    #[clap(
+        help = ALLOWED_DIRS_OPT_HELP,
+        long = ALLOWED_DIRS_OPT_LONG,
+        name = ALLOWED_DIRS_OPT_NAME
+    )]
+    pub allowed_dirs_filepath: Option<PathBuf>,
+
     #[clap(
         help = "Description of the project to create",
         long = "description",
@@ -165,6 +200,7 @@ pub struct NewCommandArguments {
 impl NewCommandArguments {
     pub fn new(tpl: String, name: String) -> Self {
         Self {
+            allowed_dirs_filepath: None,
             desc: None,
             dest: None,
             tpl_repo_url: DEFAULT_TPL_GIT_REPO_URL.into(),
@@ -178,25 +214,14 @@ impl NewCommandArguments {
     }
 }
 
-#[derive(Debug)]
-struct InvalidVariableError(String);
-
-impl Error for InvalidVariableError {}
-
-impl Display for InvalidVariableError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "`{}` does not match `{}`", self.0, KEY_VALUE_PATTERN)
-    }
-}
-
-fn parse_key_value(key_val: &str) -> Result<(String, String), InvalidVariableError> {
+fn parse_key_value(key_val: &str) -> Result<(String, String)> {
     let regex = Regex::new(KEY_VALUE_PATTERN).unwrap();
     if let Some(captures) = regex.captures(key_val) {
         let key = captures.get(1).unwrap().as_str();
         let val = captures.get(2).unwrap().as_str();
         Ok((key.trim().into(), val.trim().into()))
     } else {
-        Err(InvalidVariableError(key_val.into()))
+        Err(Error::InvalidVariable(key_val.into()))
     }
 }
 
@@ -223,6 +248,19 @@ mod test {
                     |kind| match kind {
                         CommandKind::Env(_) => (),
                         kind => panic!("expected Env (actual: {:?})", kind),
+                    },
+                )
+            }
+
+            #[test]
+            fn hook() {
+                test(
+                    || Parameters {
+                        cmd: CommandArgument::Hook(HookCommandArguments::default()),
+                    },
+                    |kind| match kind {
+                        CommandKind::Hook(_) => (),
+                        kind => panic!("expected Hook (actual: {:?})", kind),
                     },
                 )
             }
@@ -433,22 +471,20 @@ mod test {
             );
         }
 
-        fn assert_err(res: Result<(String, String), InvalidVariableError>, expected_key_val: &str) {
-            let err = res.unwrap_err();
-            assert_eq!(err.0, expected_key_val);
+        fn assert_err(res: Result<(String, String)>, expected_key_val: &str) {
+            match res.unwrap_err() {
+                Error::InvalidVariable(key_val) => assert_eq!(key_val, expected_key_val),
+                err => panic!("expected InvalidVariable (actual: {:?})", err),
+            }
         }
 
-        fn assert_key_val(
-            res: Result<(String, String), InvalidVariableError>,
-            expected_key: &str,
-            expected_val: &str,
-        ) {
+        fn assert_key_val(res: Result<(String, String)>, expected_key: &str, expected_val: &str) {
             let (key, val) = res.unwrap();
             assert_eq!(key, expected_key);
             assert_eq!(val, expected_val);
         }
 
-        fn test<P: Fn() -> Parameters, A: Fn(Result<(String, String), InvalidVariableError>)>(
+        fn test<P: Fn() -> Parameters, A: Fn(Result<(String, String)>)>(
             create_params_fn: P,
             assert_fn: A,
         ) {

@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use home::home_dir;
 use log::{debug, trace};
 #[cfg(test)]
 use stub_trait::stub;
@@ -25,6 +26,8 @@ pub trait FileSystem {
     fn cwd(&self) -> Result<PathBuf>;
 
     fn delete_dir(&self, path: &Path) -> Result<()>;
+
+    fn home_dirpath(&self) -> Result<PathBuf>;
 
     fn open(&self, path: &Path, opts: OpenOptions) -> Result<File>;
 
@@ -93,6 +96,11 @@ impl FileSystem for DefaultFileSystem {
                 format!("Unable to delete directory {}: {}", path.display(), err),
             ))
         })
+    }
+
+    fn home_dirpath(&self) -> Result<PathBuf> {
+        trace!("Getting home directory");
+        home_dir().ok_or(Error::HomeNotFound)
     }
 
     fn open(&self, path: &Path, opts: OpenOptions) -> Result<File> {

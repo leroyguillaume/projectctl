@@ -1,0 +1,11 @@
+_projectctl_hook() {
+  if grep ^$(pwd)\$ {{ allowed_dirs_filepath }} > /dev/null 2>&1; then
+    eval $({{ program }} {{ env_cmd }})
+  fi
+}
+
+if [[ -z ${chpwd_functions[(r)_projectctl_hook]} ]]; then
+  chpwd_functions=( _projectctl_hook ${chpwd_functions[@]} )
+fi
+
+_projectctl_hook
