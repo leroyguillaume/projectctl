@@ -79,6 +79,7 @@ impl LiquidRenderer {
                                     .truncate(true)
                                     .write(true)
                                     .to_owned(),
+                                false,
                             )?;
                             debug!("Rendering {} into {}", path.display(), dest.display());
                             tpl.render_to(&mut file, obj)
@@ -87,10 +88,10 @@ impl LiquidRenderer {
                                     src: LiquidErrorSource::File(path.to_path_buf()),
                                 })?;
                         } else {
-                            self.fs.copy(&path, &dest)?;
+                            self.fs.copy(&path, &dest, false)?;
                         }
                     } else {
-                        self.fs.copy(&path, &dest)?;
+                        self.fs.copy(&path, &dest, false)?;
                     }
                 }
             }
@@ -273,10 +274,10 @@ mod test {
                         res.unwrap();
                         let dirpath = ctx.dest.join(var_val);
                         let static_filepath = dirpath.join(ctx.static_filename);
-                        let static_file_content = read_to_string(&static_filepath).unwrap();
+                        let static_file_content = read_to_string(static_filepath).unwrap();
                         assert_eq!(static_file_content, files_content);
                         let tpled_filepath = dirpath.join(ctx.tpled_filename.with_extension(""));
-                        let tpled_file_content = read_to_string(&tpled_filepath).unwrap();
+                        let tpled_file_content = read_to_string(tpled_filepath).unwrap();
                         assert_eq!(tpled_file_content, var_val);
                         assert!(!ctx.dest.join(GIT_DIRNAME).exists());
                     },
@@ -298,8 +299,8 @@ mod test {
                 let static_filepath = tpled_dirpath.join(ctx.static_filename);
                 let tpled_filepath = tpled_dirpath.join(&ctx.tpled_filename);
                 create_dir_all(&tpled_dirpath).unwrap();
-                write(&static_filepath, &params.files_content).unwrap();
-                write(&tpled_filepath, &params.files_content).unwrap();
+                write(static_filepath, &params.files_content).unwrap();
+                write(tpled_filepath, &params.files_content).unwrap();
                 Repository::init(&ctx.tpl_dirpath).unwrap();
                 let renderer = LiquidRenderer {
                     fs: Box::new(DefaultFileSystem),

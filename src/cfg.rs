@@ -73,7 +73,7 @@ impl DefaultConfigLoader {
         fs: &dyn FileSystem,
     ) -> Result<()> {
         info!("Loading configuration from {}", filepath.display());
-        let file = fs.open(filepath, OpenOptions::new().read(true).to_owned())?;
+        let file = fs.open(filepath, OpenOptions::new().read(true).to_owned(), false)?;
         debug!("Loading file {}", filepath.display());
         let cfg_val: Value =
             serde_yaml::from_reader(file).map_err(|cause| Error::MalformedYaml {

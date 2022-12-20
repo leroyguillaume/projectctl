@@ -188,6 +188,7 @@ impl NewCommand {
         let mut allowed_dirs_file = fs.open(
             &allowed_dirs_filepath,
             OpenOptions::new().create(true).write(true).to_owned(),
+            true,
         )?;
         let allowed_dirs = allowed_dirs
             .iter()
@@ -230,6 +231,7 @@ impl NewCommand {
                 .truncate(false)
                 .write(true)
                 .to_owned(),
+            false,
         )?;
         if !has_trailing_new_line {
             writeln!(&mut gitignore_file).map_err(|err| {
@@ -1289,9 +1291,10 @@ mod test {
                     .with_stub_of_open({
                         let allowed_dirs_filepath = expected.allowed_dirs_filepath.clone();
                         let dest = expected.dest.clone();
-                        move |i, path, opts| {
+                        move |i, path, opts, lock| {
                             if i == 0 && !params.fail_allowed_dirs_reading {
                                 assert_eq!(path, allowed_dirs_filepath);
+                                assert!(lock);
                                 if params.fail_allowed_dirs_opening {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 } else {
@@ -1299,6 +1302,7 @@ mod test {
                                 }
                             } else if i == 0 && params.fail_allowed_dirs_reading || i == 1 {
                                 assert_eq!(path, dest.join(GITIGNORE_FILENAME));
+                                assert!(!lock);
                                 if params.fail_gitignore_opening {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 } else {
