@@ -12,23 +12,27 @@ use log::trace;
 
 use crate::{
     cli::{HookCommandArguments, HookCommandShellArgument, ENV_COMMAND},
-    consts::PROGRAM_NAME,
     err::{Error, Result},
-    fs::{DefaultFileSystem, FileSystem},
-    utils::allowed_dirs_filepath,
+    paths::{DefaultPaths, Paths},
 };
+
+const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
 
 const BASH_HOOK_TEMPLATE: &str = include_str!("../../resources/main/hooks/bash");
 const ZSH_HOOK_TEMPLATE: &str = include_str!("../../resources/main/hooks/zsh");
 
 const SHELL_ENV_VAR_KEY: &str = "SHELL";
 
+const ALLOWED_DIRS_FILEPATH_VAR_KEY: &str = "allowed_dirs_filepath";
+const ENV_COMMAND_VAR_KEY: &str = "env_cmd";
+const PROGRAM_VAR_KEY: &str = "program";
+
 type EnvFn = dyn Fn(&str) -> std::result::Result<String, VarError>;
 
 pub struct HookCommand {
     args: HookCommandArguments,
     env_fn: Box<EnvFn>,
-    fs: Box<dyn FileSystem>,
+    paths: Box<dyn Paths>,
 }
 
 impl HookCommand {
@@ -36,7 +40,7 @@ impl HookCommand {
         Self {
             args,
             env_fn: Box::new(|key| var(key)),
-            fs: Box::new(DefaultFileSystem),
+            paths: Box::new(DefaultPaths::new()),
         }
     }
 
@@ -63,22 +67,23 @@ impl HookCommand {
                     Err(Error::UnsupportedShell(shell))
                 }
             })?;
-        let allowed_dirs_filepath =
-            allowed_dirs_filepath(self.args.allowed_dirs_filepath, self.fs.as_ref())?;
+        let allowed_dirs_filepath = self
+            .paths
+            .allowed_dirs(self.args.allowed_dirs_filepath, None)?;
         let allowed_dirs_filepath = allowed_dirs_filepath.to_string_lossy().to_string();
         let parser = ParserBuilder::with_stdlib().build().unwrap();
         let tpl = parser.parse(shell).unwrap();
         let mut obj = Object::new();
         obj.insert(
-            KString::from_static("allowed_dirs_filepath"),
+            KString::from_static(ALLOWED_DIRS_FILEPATH_VAR_KEY),
             Value::Scalar(ScalarCow::from(allowed_dirs_filepath)),
         );
         obj.insert(
-            KString::from_static("env_cmd"),
+            KString::from_static(ENV_COMMAND_VAR_KEY),
             Value::Scalar(ScalarCow::from(ENV_COMMAND)),
         );
         obj.insert(
-            KString::from_static("program"),
+            KString::from_static(PROGRAM_VAR_KEY),
             Value::Scalar(ScalarCow::from(PROGRAM_NAME)),
         );
         tpl.render_to(out, &obj).unwrap();
@@ -96,14 +101,11 @@ impl Debug for HookCommand {
 
 #[cfg(test)]
 mod test {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use tempfile::tempdir;
 
-    use crate::{
-        consts::{CONFIG_DIRNAME, DEFAULT_ALLOWED_DIRS_FILENAME},
-        fs::StubFileSystem,
-    };
+    use crate::paths::StubPaths;
 
     use super::*;
 
@@ -125,7 +127,7 @@ mod test {
             use super::*;
 
             struct Context {
-                home_dirpath: PathBuf,
+                allowed_dirs_filepath: PathBuf,
             }
 
             struct Parameters {
@@ -169,30 +171,21 @@ mod test {
                         args: HookCommandArguments::default(),
                         shell_env_var_val: Some("/bin/bash"),
                     },
-                    |ctx, res| {
-                        assert_ok(
-                            res,
-                            &ctx.home_dirpath
-                                .join(CONFIG_DIRNAME)
-                                .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                            BASH_HOOK_TEMPLATE,
-                        )
-                    },
+                    |ctx, res| assert(ctx, res, BASH_HOOK_TEMPLATE),
                 )
             }
 
             #[test]
             fn ok_when_bash_arg() {
-                let allowed_dirs_filepath = Path::new("/dirs");
                 test(
                     |_| Parameters {
                         args: HookCommandArguments {
-                            allowed_dirs_filepath: Some(allowed_dirs_filepath.to_path_buf()),
+                            allowed_dirs_filepath: Some("/dirs".into()),
                             shell: Some(HookCommandShellArgument::Bash),
                         },
                         shell_env_var_val: Some("/bin/zsh"),
                     },
-                    |_, res| assert_ok(res, allowed_dirs_filepath, BASH_HOOK_TEMPLATE),
+                    |ctx, res| assert(ctx, res, BASH_HOOK_TEMPLATE),
                 )
             }
 
@@ -203,49 +196,41 @@ mod test {
                         args: HookCommandArguments::default(),
                         shell_env_var_val: Some("/bin/zsh"),
                     },
-                    |ctx, res| {
-                        assert_ok(
-                            res,
-                            &ctx.home_dirpath
-                                .join(CONFIG_DIRNAME)
-                                .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                            ZSH_HOOK_TEMPLATE,
-                        )
-                    },
+                    |ctx, res| assert(ctx, res, ZSH_HOOK_TEMPLATE),
                 )
             }
 
             #[test]
             fn ok_when_zsh_arg() {
-                let allowed_dirs_filepath = Path::new("/dirs");
                 test(
                     |_| Parameters {
                         args: HookCommandArguments {
-                            allowed_dirs_filepath: Some(allowed_dirs_filepath.to_path_buf()),
+                            allowed_dirs_filepath: Some("/dirs".into()),
                             shell: Some(HookCommandShellArgument::Zsh),
                         },
                         shell_env_var_val: Some("/bin/bash"),
                     },
-                    |_, res| assert_ok(res, allowed_dirs_filepath, ZSH_HOOK_TEMPLATE),
+                    |ctx, res| assert(ctx, res, ZSH_HOOK_TEMPLATE),
                 )
             }
 
-            fn assert_ok(res: crate::err::Result<String>, allowed_dirs_filepath: &Path, tpl: &str) {
+            fn assert(ctx: &Context, res: Result<String>, tpl: &str) {
                 let out = res.unwrap();
-                let allowed_dirs_filepath = allowed_dirs_filepath.to_string_lossy().to_string();
                 let parser = ParserBuilder::with_stdlib().build().unwrap();
                 let tpl = parser.parse(tpl).unwrap();
                 let mut obj = Object::new();
                 obj.insert(
-                    KString::from_static("allowed_dirs_filepath"),
-                    Value::Scalar(ScalarCow::from(allowed_dirs_filepath)),
+                    KString::from_static(ALLOWED_DIRS_FILEPATH_VAR_KEY),
+                    Value::Scalar(ScalarCow::from(
+                        ctx.allowed_dirs_filepath.to_string_lossy().to_string(),
+                    )),
                 );
                 obj.insert(
-                    KString::from_static("env_cmd"),
+                    KString::from_static(ENV_COMMAND_VAR_KEY),
                     Value::Scalar(ScalarCow::from(ENV_COMMAND)),
                 );
                 obj.insert(
-                    KString::from_static("program"),
+                    KString::from_static(PROGRAM_VAR_KEY),
                     Value::Scalar(ScalarCow::from(PROGRAM_NAME)),
                 );
                 let mut expected_out = vec![];
@@ -254,17 +239,22 @@ mod test {
                 assert_eq!(out, expected_out);
             }
 
-            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, crate::err::Result<String>)>(
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<String>)>(
                 create_params_fn: P,
                 assert_fn: A,
             ) {
                 let ctx = Context {
-                    home_dirpath: tempdir().unwrap().into_path(),
+                    allowed_dirs_filepath: tempdir().unwrap().into_path().join("allowed-dirs"),
                 };
                 let params = create_params_fn(&ctx);
-                let fs = StubFileSystem::new().with_stub_of_home_dirpath({
-                    let home_dirpath = ctx.home_dirpath.clone();
-                    move |_| Ok(home_dirpath.clone())
+                let paths = StubPaths::new().with_stub_of_allowed_dirs({
+                    let filepath = ctx.allowed_dirs_filepath.clone();
+                    let expected_allowed_dirs_filepaths = params.args.allowed_dirs_filepath.clone();
+                    move |_, allowed_dirs_filepath, cfg_filepath| {
+                        assert_eq!(allowed_dirs_filepath, expected_allowed_dirs_filepaths);
+                        assert!(cfg_filepath.is_none());
+                        Ok(filepath.clone())
+                    }
                 });
                 let env_fn = move |key: &str| -> std::result::Result<String, VarError> {
                     assert_eq!(key, SHELL_ENV_VAR_KEY);
@@ -277,7 +267,7 @@ mod test {
                 let cmd = HookCommand {
                     args: params.args,
                     env_fn: Box::new(env_fn),
-                    fs: Box::new(fs),
+                    paths: Box::new(paths),
                 };
                 let mut out = vec![];
                 let res = cmd.run(&mut out).map(|_| String::from_utf8(out).unwrap());
