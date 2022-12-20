@@ -9,19 +9,18 @@ use log::{debug, info, log_enabled, trace, Level};
 use stub_trait::stub;
 
 use crate::{
-    err::{Error, LiquidErrorSource},
+    err::{Error, LiquidErrorSource, Result},
     fs::{DefaultFileSystem, FileSystem},
 };
 
 const GIT_DIRNAME: &str = ".git";
 const LIQUID_EXTENSION: &str = "liquid";
 
-pub type Result = std::result::Result<(), Error>;
 pub type Vars = HashMap<String, String>;
 
 #[cfg_attr(test, stub)]
 pub trait Renderer {
-    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result;
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result<()>;
 }
 
 pub struct LiquidRenderer {
@@ -35,7 +34,7 @@ impl LiquidRenderer {
         }
     }
 
-    fn do_render_recursively(&self, tpl_dirpath: &Path, dest: &Path, obj: &Object) -> Result {
+    fn do_render_recursively(&self, tpl_dirpath: &Path, dest: &Path, obj: &Object) -> Result<()> {
         let parser = ParserBuilder::with_stdlib().build().unwrap();
         debug!(
             "Rendering files from {} recursively into {}",
@@ -101,7 +100,7 @@ impl LiquidRenderer {
 }
 
 impl Renderer for LiquidRenderer {
-    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result {
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result<()> {
         info!(
             "Rendering files from template `{}`",
             tpl_dirpath.file_name().unwrap().to_string_lossy(),
@@ -284,7 +283,7 @@ mod test {
                 );
             }
 
-            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result)>(
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<()>)>(
                 create_params_fn: P,
                 assert_fn: A,
             ) {
