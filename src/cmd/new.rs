@@ -11,14 +11,12 @@ use log::{debug, info, trace, warn};
 use crate::{
     cli::NewCommandArguments,
     consts::LOCAL_CONFIG_FILENAME,
-    err::Error,
+    err::{Error, Result},
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
     renderer::{LiquidRenderer, Renderer, Vars},
     utils::allowed_dirs_filepath,
 };
-
-use super::Result;
 
 const DESCRIPTION_VAR_KEY: &str = "description";
 const GIT_USER_EMAIL_VAR_KEY: &str = "git_user_email";
@@ -48,7 +46,7 @@ impl NewCommand {
         }
     }
 
-    pub fn run(self) -> Result {
+    pub fn run(self) -> Result<()> {
         info!("Creating project `{}`", self.args.name);
         let dest = self
             .args
@@ -171,7 +169,7 @@ impl NewCommand {
         }
     }
 
-    fn update_allowed_dirs(dest: &Path, arg: Option<PathBuf>, fs: &dyn FileSystem) -> Result {
+    fn update_allowed_dirs(dest: &Path, arg: Option<PathBuf>, fs: &dyn FileSystem) -> Result<()> {
         info!("Updating allowed directories list");
         let allowed_dirs_filepath = allowed_dirs_filepath(arg, fs)?;
         let allowed_dirs = if allowed_dirs_filepath.exists() {
@@ -208,7 +206,7 @@ impl NewCommand {
     }
 
     #[inline]
-    fn update_gitignore(dest: &Path, fs: &dyn FileSystem) -> Result {
+    fn update_gitignore(dest: &Path, fs: &dyn FileSystem) -> Result<()> {
         info!("Updating gitignore");
         let gitignore_path = dest.join(GITIGNORE_FILENAME);
         let mut filenames_to_ignore = BTreeSet::from_iter(FILENAMES_TO_IGNORE);
@@ -1233,7 +1231,7 @@ mod test {
             fn test<
                 P: Fn(&Context) -> Parameters,
                 E: Fn(&Context) -> Expected,
-                A: Fn(&Context, Result),
+                A: Fn(&Context, Result<()>),
             >(
                 create_params_fn: P,
                 create_expected_fn: E,

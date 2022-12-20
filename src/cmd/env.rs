@@ -10,11 +10,9 @@ use crate::{
     cfg::{ConfigLoader, DefaultConfigLoader, EnvVarKind},
     cli::EnvCommandArguments,
     consts::{LOCAL_CONFIG_FILENAME, PROJECT_CONFIG_FILENAME},
-    err::Error,
+    err::{Error, Result},
     fs::{DefaultFileSystem, FileSystem},
 };
-
-use super::Result;
 
 const SPECIAL_CHARS_PATTERN: &str = "[\"$]";
 
@@ -33,7 +31,7 @@ impl EnvCommand {
         }
     }
 
-    pub fn run(self, out: &mut dyn Write) -> Result {
+    pub fn run(self, out: &mut dyn Write) -> Result<()> {
         let project_dirpath = self
             .args
             .project_dirpath

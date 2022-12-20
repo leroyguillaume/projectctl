@@ -13,12 +13,10 @@ use log::trace;
 use crate::{
     cli::{HookCommandArguments, HookCommandShellArgument, ENV_COMMAND},
     consts::PROGRAM_NAME,
-    err::Error,
+    err::{Error, Result},
     fs::{DefaultFileSystem, FileSystem},
     utils::allowed_dirs_filepath,
 };
-
-use super::Result;
 
 const BASH_HOOK_TEMPLATE: &str = include_str!("../../resources/main/hooks/bash");
 const ZSH_HOOK_TEMPLATE: &str = include_str!("../../resources/main/hooks/zsh");
@@ -42,7 +40,7 @@ impl HookCommand {
         }
     }
 
-    pub fn run(self, out: &mut dyn Write) -> Result {
+    pub fn run(self, out: &mut dyn Write) -> Result<()> {
         let shell = self
             .args
             .shell
