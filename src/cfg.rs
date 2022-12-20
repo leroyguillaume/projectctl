@@ -72,7 +72,7 @@ impl DefaultConfigLoader {
         schema: &JSONSchema,
         fs: &dyn FileSystem,
     ) -> Result<()> {
-        info!("Loading configuration from {}", filepath.display());
+        info!("Loading configuration");
         let file = fs.open(filepath, OpenOptions::new().read(true).to_owned(), false)?;
         debug!("Loading file {}", filepath.display());
         let cfg_val: Value =
