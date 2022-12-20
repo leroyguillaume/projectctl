@@ -1,12 +1,9 @@
 use std::{
-    collections::BTreeSet,
     fmt::{self, Debug, Formatter},
-    fs::OpenOptions,
-    io::{self, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn};
 
 use crate::{
     cli::NewCommandArguments,
@@ -94,9 +91,13 @@ impl NewCommand {
             });
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
         if res.is_ok() {
-            if let Err(err) =
-                Self::update_allowed_dirs(&dest, self.args.allowed_dirs_filepath, self.fs.as_ref())
-            {
+            info!("Updating allowed directories list");
+            let res = allowed_dirs_filepath(self.args.allowed_dirs_filepath, self.fs.as_ref())
+                .and_then(|path| {
+                    self.fs
+                        .ensure_lines(&[&dest.to_string_lossy()], &path, true)
+                });
+            if let Err(err) = res {
                 warn!("{}", err);
             }
             info!("Initializing git repository");
@@ -104,7 +105,12 @@ impl NewCommand {
                 warn!("{}", err);
             }
             if !self.args.skip_gitignore_update {
-                if let Err(err) = Self::update_gitignore(&dest, self.fs.as_ref()) {
+                info!("Updating gitignore");
+                if let Err(err) = self.fs.ensure_lines(
+                    &FILENAMES_TO_IGNORE,
+                    &dest.join(GITIGNORE_FILENAME),
+                    false,
+                ) {
                     warn!("{}", err);
                 }
             }
@@ -168,88 +174,6 @@ impl NewCommand {
             );
         }
     }
-
-    fn update_allowed_dirs(dest: &Path, arg: Option<PathBuf>, fs: &dyn FileSystem) -> Result<()> {
-        info!("Updating allowed directories list");
-        let allowed_dirs_filepath = allowed_dirs_filepath(arg, fs)?;
-        let allowed_dirs = if allowed_dirs_filepath.exists() {
-            fs.read_to_string(&allowed_dirs_filepath)?
-        } else {
-            String::new()
-        };
-        let mut allowed_dirs: BTreeSet<&str> = allowed_dirs.lines().collect();
-        let dest = dest.to_string_lossy().to_string();
-        allowed_dirs.insert(&dest);
-        if let Some(parent) = allowed_dirs_filepath.parent() {
-            fs.create_dir(parent)?;
-        }
-        let mut allowed_dirs_file = fs.open(
-            &allowed_dirs_filepath,
-            OpenOptions::new().create(true).write(true).to_owned(),
-            true,
-        )?;
-        let allowed_dirs = allowed_dirs
-            .iter()
-            .map(|path| path.to_string())
-            .reduce(|accum, item| format!("{}\n{}", accum, item))
-            .unwrap();
-        writeln!(&mut allowed_dirs_file, "{}", allowed_dirs).map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!(
-                    "Unable to write into {}: {}",
-                    allowed_dirs_filepath.display(),
-                    err
-                ),
-            ))
-        })
-    }
-
-    #[inline]
-    fn update_gitignore(dest: &Path, fs: &dyn FileSystem) -> Result<()> {
-        info!("Updating gitignore");
-        let gitignore_path = dest.join(GITIGNORE_FILENAME);
-        let mut filenames_to_ignore = BTreeSet::from_iter(FILENAMES_TO_IGNORE);
-        let has_trailing_new_line = if gitignore_path.exists() {
-            let content = fs.read_to_string(&gitignore_path)?;
-            for line in content.lines() {
-                if filenames_to_ignore.remove(line.trim()) {
-                    trace!("gitignore already contains `{}`", line);
-                }
-            }
-            content.ends_with('\n')
-        } else {
-            true
-        };
-        let mut gitignore_file = fs.open(
-            &gitignore_path,
-            OpenOptions::new()
-                .append(true)
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .to_owned(),
-            false,
-        )?;
-        if !has_trailing_new_line {
-            writeln!(&mut gitignore_file).map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to write into {}: {}", gitignore_path.display(), err),
-                ))
-            })?;
-        }
-        for filename in filenames_to_ignore {
-            writeln!(&mut gitignore_file, "{}", filename).map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to write into {}: {}", gitignore_path.display(), err),
-                ))
-            })?;
-            debug!("`{}` added to gitignore", filename);
-        }
-        Ok(())
-    }
 }
 
 impl Debug for NewCommand {
@@ -264,7 +188,7 @@ impl Debug for NewCommand {
 mod test {
     use std::{
         collections::HashMap,
-        fs::{create_dir_all, read_to_string, remove_dir_all, write},
+        fs::{create_dir_all, remove_dir_all, write},
         io::{self},
         path::PathBuf,
     };
@@ -319,15 +243,13 @@ mod test {
             struct Parameters {
                 allowed_dirs_content: Option<String>,
                 args: NewCommandArguments,
-                fail_allowed_dirs_opening: bool,
-                fail_allowed_dirs_reading: bool,
+                fail_allowed_dirs_update: bool,
                 fail_cwd: bool,
                 fail_dir_deletion: bool,
                 fail_git_checking_out: bool,
                 fail_git_default_value_retrieving: bool,
                 fail_git_init: bool,
-                fail_gitignore_opening: bool,
-                fail_gitignore_reading: bool,
+                fail_gitignore_update: bool,
                 fail_home_dirpath_retrieving: bool,
                 fail_rendering: bool,
                 gitignore_content: Option<String>,
@@ -343,15 +265,13 @@ mod test {
                             dest: Some(dest.clone()),
                             ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -382,15 +302,13 @@ mod test {
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: true,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -424,15 +342,13 @@ mod test {
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -467,15 +383,13 @@ mod test {
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: true,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -509,15 +423,13 @@ mod test {
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: true,
                         gitignore_content: None,
@@ -559,15 +471,13 @@ mod test {
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: true,
                         fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -582,15 +492,6 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -598,25 +499,18 @@ mod test {
 
             #[test]
             fn ok_when_git_init_failed() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -638,41 +532,25 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
             }
 
             #[test]
-            fn ok_when_gitignore_opening_failed() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
+            fn ok_when_gitignore_update_failed() {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
-                        fail_gitignore_opening: true,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: true,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -694,66 +572,6 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        assert!(!dest.join(GITIGNORE_FILENAME).exists());
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_gitignore_reading_failed() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                let expected_gitignore_content = "node_modules";
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: None,
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: false,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: true,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: Some(expected_gitignore_content.into()),
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -789,15 +607,13 @@ mod test {
                                 (var_key.into(), var_val.into()),
                             ],
                         },
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -817,10 +633,6 @@ mod test {
                     |ctx, res| {
                         res.unwrap();
                         assert!(dest.exists());
-                        let allowed_dirs = read_to_string(&allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs, expected_allowed_dirs);
-                        assert!(!dest.join(GITIGNORE_FILENAME).exists());
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -828,11 +640,6 @@ mod test {
 
             #[test]
             fn ok_when_tpl_repo_tag_is_some() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 let tpl_repo_tag = "0.1.0";
                 test(
@@ -842,15 +649,13 @@ mod test {
                             tpl_repo_tag: Some(tpl_repo_tag.into()),
                             ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -872,154 +677,25 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
             }
 
             #[test]
-            fn ok_when_gitignore_exists() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                let gitignore_content = "node_modules";
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: None,
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: Some(gitignore_content.into()),
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let ignore_lines_appended = FILENAMES_TO_IGNORE.join("\n");
-                        let expected_gitignore_content =
-                            format!("{}\n{}\n", gitignore_content, ignore_lines_appended);
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_gitignore_contains_one_of_files_to_ignore() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                let expected_gitignore_content = format!("{} \n", FILENAMES_TO_IGNORE[0]);
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: None,
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: Some(expected_gitignore_content.clone()),
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        let expected_allowed_dirs_content = format!("{}\n", dest.display());
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_allowed_dirs_opening_failed() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
+            fn ok_when_allowed_dirs_update_failed() {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
                         allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: true,
-                        fail_allowed_dirs_reading: false,
+                        fail_allowed_dirs_update: true,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
+                        fail_gitignore_update: false,
                         fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
@@ -1041,188 +717,6 @@ mod test {
                         res.unwrap();
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        assert!(!allowed_dirs_filepath.exists());
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_allowed_dirs_reading_failed() {
-                let expected_allowed_dirs_content = "/app";
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: Some(expected_allowed_dirs_content.into()),
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: true,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: None,
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_allowed_dirs_exists() {
-                let allowed_dirs_content = "/app";
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: Some(allowed_dirs_content.into()),
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: None,
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let expected_allowed_dirs_content =
-                            format!("{}\n{}\n", allowed_dirs_content, dest.display());
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
-                        assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_allowed_dirs_already_contains_dest() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                let allowed_dirs_content_fn = |ctx: &Context| -> String {
-                    let dest = dest_fn(ctx);
-                    dest.display().to_string()
-                };
-                test(
-                    |ctx| Parameters {
-                        allowed_dirs_content: Some(allowed_dirs_content_fn(ctx)),
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_opening: false,
-                        fail_allowed_dirs_reading: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
-                        fail_git_init: true,
-                        fail_gitignore_opening: false,
-                        fail_gitignore_reading: false,
-                        fail_home_dirpath_retrieving: false,
-                        fail_rendering: false,
-                        gitignore_content: None,
-                    },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
-                    },
-                    |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        let expected_allowed_dirs_content =
-                            format!("{}\n", allowed_dirs_content_fn(ctx));
-                        let allowed_dirs_filepath = allowed_dirs_filepath_fn(ctx);
-                        let allowed_dirs_content = read_to_string(allowed_dirs_filepath).unwrap();
-                        assert_eq!(allowed_dirs_content, expected_allowed_dirs_content);
-                        let expected_gitignore_content =
-                            format!("{}\n", FILENAMES_TO_IGNORE.join("\n"));
-                        let gitignore_content =
-                            read_to_string(dest.join(GITIGNORE_FILENAME)).unwrap();
-                        assert_eq!(gitignore_content, expected_gitignore_content);
                         assert!(!ctx.tpl_repo_path.exists());
                     },
                 );
@@ -1286,50 +780,30 @@ mod test {
                             }
                         }
                     })
-                    .with_stub_of_open({
+                    .with_stub_of_ensure_lines({
                         let allowed_dirs_filepath = expected.allowed_dirs_filepath.clone();
                         let dest = expected.dest.clone();
-                        move |i, path, opts, lock| {
-                            if i == 0 && !params.fail_allowed_dirs_reading {
+                        move |i, lines, path, lock| {
+                            if i == 0 {
+                                assert_eq!(lines, [dest.to_string_lossy().to_string()]);
                                 assert_eq!(path, allowed_dirs_filepath);
                                 assert!(lock);
-                                if params.fail_allowed_dirs_opening {
+                                if params.fail_allowed_dirs_update {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 } else {
-                                    opts.open(path).map_err(Error::IO)
+                                    Ok(())
                                 }
-                            } else if i == 0 && params.fail_allowed_dirs_reading || i == 1 {
+                            } else if i == 1 && !params.args.skip_gitignore_update {
+                                assert_eq!(lines, FILENAMES_TO_IGNORE);
                                 assert_eq!(path, dest.join(GITIGNORE_FILENAME));
                                 assert!(!lock);
-                                if params.fail_gitignore_opening {
+                                if params.fail_gitignore_update {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 } else {
-                                    opts.open(path).map_err(Error::IO)
+                                    Ok(())
                                 }
                             } else {
                                 panic!("unexpected call of open");
-                            }
-                        }
-                    })
-                    .with_stub_of_read_to_string({
-                        let dest = expected.dest.clone();
-                        move |i, path| {
-                            if i == 0 && params.allowed_dirs_content.is_some() {
-                                assert_eq!(path, expected.allowed_dirs_filepath);
-                                if params.fail_allowed_dirs_reading {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
-                                } else {
-                                    read_to_string(path).map_err(Error::IO)
-                                }
-                            } else if i == 0 && params.allowed_dirs_content.is_none() || i == 1 {
-                                assert_eq!(path, dest.join(GITIGNORE_FILENAME));
-                                if params.fail_gitignore_reading {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
-                                } else {
-                                    read_to_string(path).map_err(Error::IO)
-                                }
-                            } else {
-                                panic!("unexpected call of read_to_string");
                             }
                         }
                     });

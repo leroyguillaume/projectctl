@@ -1,7 +1,7 @@
 use std::{
     env::current_dir,
     fs::{create_dir_all, read_to_string, remove_dir_all, File, OpenOptions, ReadDir},
-    io::{self, copy},
+    io::{self, copy, Write},
     path::{Path, PathBuf},
 };
 
@@ -26,6 +26,8 @@ pub trait FileSystem {
 
     fn delete_dir(&self, path: &Path) -> Result<()>;
 
+    fn ensure_lines(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()>;
+
     fn home_dirpath(&self) -> Result<PathBuf>;
 
     fn open(&self, path: &Path, opts: OpenOptions, lock: bool) -> Result<File>;
@@ -39,6 +41,9 @@ pub struct DefaultFileSystem;
 
 impl FileSystem for DefaultFileSystem {
     fn copy(&self, src: &Path, dest: &Path, lock: bool) -> Result<()> {
+        if let Some(parent) = dest.parent() {
+            self.create_dir(parent)?;
+        }
         debug!("Copying {} into {}", src.display(), dest.display());
         let mut src_file = self.open(src, OpenOptions::new().read(true).to_owned(), false)?;
         let mut dest_file = self.open(
@@ -62,13 +67,16 @@ impl FileSystem for DefaultFileSystem {
     }
 
     fn create_dir(&self, path: &Path) -> Result<()> {
-        debug!("Creating directory {}", path.display());
-        create_dir_all(path).map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to create directory {}: {}", path.display(), err),
-            ))
-        })
+        if !path.exists() {
+            debug!("Creating directory {}", path.display());
+            create_dir_all(path).map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to create directory {}: {}", path.display(), err),
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     fn create_temp_dir(&self) -> Result<PathBuf> {
@@ -101,6 +109,45 @@ impl FileSystem for DefaultFileSystem {
                 format!("Unable to delete directory {}: {}", path.display(), err),
             ))
         })
+    }
+
+    fn ensure_lines(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()> {
+        let content = if path.exists() {
+            self.read_to_string(path)?
+        } else {
+            String::new()
+        };
+        let mut content_lines: Vec<&str> = content.lines().collect();
+        let content_lines_len = content_lines.len();
+        for line in lines {
+            if !content_lines.contains(line) {
+                content_lines.push(line);
+            }
+        }
+        if content_lines_len != content_lines.len() {
+            if let Some(parent) = path.parent() {
+                self.create_dir(parent)?;
+            }
+            let mut file = self.open(
+                path,
+                OpenOptions::new().create(true).write(true).to_owned(),
+                lock,
+            )?;
+            for line in content_lines {
+                writeln!(&mut file, "{}", line).map_err(|err| {
+                    Error::IO(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "Unable to write line `{}` in file {}: {}",
+                            line,
+                            path.display(),
+                            err
+                        ),
+                    ))
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn home_dirpath(&self) -> Result<PathBuf> {
@@ -221,13 +268,14 @@ mod test {
             ) {
                 let root_dirpath = tempdir().unwrap().into_path();
                 let ctx = Context {
-                    dest: root_dirpath.join("dest"),
+                    dest: root_dirpath.join("parent").join("dest"),
                     src: root_dirpath.join("src"),
                     src_content: "test",
                 };
                 let params = create_params_fn(&ctx);
                 write(&ctx.src, ctx.src_content).unwrap();
                 if let Some(content) = params.dest_content {
+                    create_dir_all(ctx.dest.parent().unwrap()).unwrap();
                     write(&ctx.dest, content).unwrap();
                 }
                 let res = DefaultFileSystem.copy(&ctx.src, &ctx.dest, params.lock);
@@ -277,6 +325,111 @@ mod test {
                 create_dir_all(path).unwrap();
                 DefaultFileSystem.delete_dir(&root_dirpath).unwrap();
                 assert!(!root_dirpath.exists());
+            }
+        }
+
+        mod ensure_lines {
+            use super::*;
+
+            struct Context {
+                line1: &'static str,
+                line2: &'static str,
+                path: PathBuf,
+            }
+
+            struct Parameters {
+                initial_content: Option<String>,
+                lock: bool,
+            }
+
+            #[test]
+            fn ok_when_file_does_not_exist() {
+                test(
+                    |_| Parameters {
+                        initial_content: None,
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, format!("{}\n{}\n", ctx.line1, ctx.line2));
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_exists() {
+                let initial_content = "line3";
+                test(
+                    |_| Parameters {
+                        initial_content: Some(initial_content.into()),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(
+                            ctx,
+                            res,
+                            format!("{}\n{}\n{}\n", initial_content, ctx.line1, ctx.line2),
+                        );
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_contains_already_one_of_lines() {
+                let initial_content_fn =
+                    |ctx: &Context| -> String { format!("\n{}\n\n", ctx.line1) };
+                test(
+                    |ctx| Parameters {
+                        initial_content: Some(initial_content_fn(ctx)),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(
+                            ctx,
+                            res,
+                            format!("{}{}\n", initial_content_fn(ctx), ctx.line2),
+                        );
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_contains_already_alll_lines() {
+                let initial_content_fn =
+                    |ctx: &Context| -> String { format!("\n{}\n\n{}\n\n", ctx.line1, ctx.line2) };
+                test(
+                    |ctx| Parameters {
+                        initial_content: Some(initial_content_fn(ctx)),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, initial_content_fn(ctx));
+                    },
+                )
+            }
+
+            fn assert_file_content(ctx: &Context, res: Result<()>, expected_content: String) {
+                res.unwrap();
+                let content = read_to_string(&ctx.path).unwrap();
+                assert_eq!(content, expected_content);
+            }
+
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<()>)>(
+                create_params_fn: P,
+                assert_fn: A,
+            ) {
+                let ctx = Context {
+                    line1: "line1",
+                    line2: "line2",
+                    path: tempdir().unwrap().into_path().join("parent").join("test"),
+                };
+                let params = create_params_fn(&ctx);
+                if let Some(content) = params.initial_content {
+                    create_dir_all(ctx.path.parent().unwrap()).unwrap();
+                    write(&ctx.path, content).unwrap();
+                }
+                let res =
+                    DefaultFileSystem.ensure_lines(&[ctx.line1, ctx.line2], &ctx.path, params.lock);
+                assert_fn(&ctx, res);
             }
         }
 
