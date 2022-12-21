@@ -11,8 +11,8 @@ use crate::{
     err::{Error, Result},
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
+    paths::{DefaultPaths, Paths},
     renderer::{LiquidRenderer, Renderer, Vars},
-    utils::allowed_dirs_filepath,
 };
 
 const DESCRIPTION_VAR_KEY: &str = "description";
@@ -30,6 +30,7 @@ pub struct NewCommand {
     args: NewCommandArguments,
     fs: Box<dyn FileSystem>,
     git: Box<dyn Git>,
+    paths: Box<dyn Paths>,
     renderer: Box<dyn Renderer>,
 }
 
@@ -39,6 +40,7 @@ impl NewCommand {
             args,
             fs: Box::new(DefaultFileSystem),
             git: Box::new(DefaultGit::new()),
+            paths: Box::new(DefaultPaths::new()),
             renderer: Box::new(LiquidRenderer::new()),
         }
     }
@@ -92,7 +94,9 @@ impl NewCommand {
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
         if res.is_ok() {
             info!("Updating allowed directories list");
-            let res = allowed_dirs_filepath(self.args.allowed_dirs_filepath, self.fs.as_ref())
+            let res = self
+                .paths
+                .allowed_dirs(self.args.allowed_dirs_filepath, None)
                 .and_then(|path| {
                     self.fs
                         .ensure_lines(&[&dest.to_string_lossy()], &path, true)
@@ -197,10 +201,7 @@ mod test {
     use tempfile::tempdir;
 
     use crate::{
-        consts::{CONFIG_DIRNAME, DEFAULT_ALLOWED_DIRS_FILENAME},
-        err::LiquidErrorSource,
-        fs::StubFileSystem,
-        git::StubGit,
+        err::LiquidErrorSource, fs::StubFileSystem, git::StubGit, paths::StubPaths,
         renderer::StubRenderer,
     };
 
@@ -224,33 +225,31 @@ mod test {
             use super::*;
 
             struct Context {
+                allowed_dirs_filepath: PathBuf,
                 cwd: PathBuf,
                 git_email: &'static str,
                 git_username: &'static str,
-                home_dirpath: PathBuf,
                 name: &'static str,
                 tpl: &'static str,
                 tpl_repo_path: PathBuf,
             }
 
             struct Expected {
-                allowed_dirs_filepath: PathBuf,
                 dest: PathBuf,
                 git_ref: Option<Reference>,
                 vars: HashMap<String, String>,
             }
 
             struct Parameters {
-                allowed_dirs_content: Option<String>,
                 args: NewCommandArguments,
-                fail_allowed_dirs_update: bool,
+                fail_allowed_dirs_path_computing: bool,
+                fail_allowed_dirs_updating: bool,
                 fail_cwd: bool,
                 fail_dir_deletion: bool,
                 fail_git_checking_out: bool,
                 fail_git_default_value_retrieving: bool,
                 fail_git_init: bool,
                 fail_gitignore_update: bool,
-                fail_home_dirpath_retrieving: bool,
                 fail_rendering: bool,
                 gitignore_content: Option<String>,
             }
@@ -260,27 +259,22 @@ mod test {
                 let dest = tempdir().unwrap().into_path();
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
+                        fail_allowed_dirs_path_computing: false,
                         args: NewCommandArguments {
                             dest: Some(dest.clone()),
                             ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
-                    |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
+                    |_| Expected {
                         dest: dest.clone(),
                         git_ref: None,
                         vars: HashMap::new(),
@@ -300,24 +294,19 @@ mod test {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: true,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::new(),
@@ -340,24 +329,19 @@ mod test {
                 let tpl_fn = |ctx: &Context| -> String { format!("{}2", ctx.tpl) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::new(),
@@ -381,24 +365,19 @@ mod test {
                 let tpl_fn = |ctx: &Context| -> String { format!("{}2", ctx.tpl) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(tpl_fn(ctx), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: true,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::new(),
@@ -421,24 +400,19 @@ mod test {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: true,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::from_iter([
@@ -461,38 +435,28 @@ mod test {
 
             #[test]
             fn ok_when_git_default_value_retrieving_failed() {
-                let allowed_dirs_filepath_fn = |ctx: &Context| -> PathBuf {
-                    ctx.home_dirpath
-                        .join(CONFIG_DIRNAME)
-                        .join(DEFAULT_ALLOWED_DIRS_FILENAME)
-                };
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: true,
                         fail_git_init: false,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: allowed_dirs_filepath_fn(ctx),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::from_iter([(NAME_VAR_NAME.into(), ctx.name.into())]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
             }
@@ -502,24 +466,19 @@ mod test {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::from_iter([
@@ -529,10 +488,7 @@ mod test {
                         ]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
             }
@@ -542,24 +498,19 @@ mod test {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: true,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::from_iter([
@@ -569,20 +520,14 @@ mod test {
                         ]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
             }
 
             #[test]
             fn ok_when_custom_args() {
-                let allowed_dirs_filepath = tempdir()
-                    .unwrap()
-                    .into_path()
-                    .join(DEFAULT_ALLOWED_DIRS_FILENAME);
+                let allowed_dirs_filepath = tempdir().unwrap().into_path().join("allowed-dirs");
                 let desc = "My wonderful project.";
                 let dest = tempdir().unwrap().into_path().join("test");
                 let tpl_repo_url = "https://my-templates.com";
@@ -591,7 +536,6 @@ mod test {
                 let var_val = "VAL";
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments {
                             allowed_dirs_filepath: Some(allowed_dirs_filepath.clone()),
                             desc: Some(desc.into()),
@@ -607,19 +551,18 @@ mod test {
                                 (var_key.into(), var_val.into()),
                             ],
                         },
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: allowed_dirs_filepath.clone(),
                         dest: dest.clone(),
                         git_ref: Some(Reference::Branch(tpl_repo_branch.into())),
                         vars: HashMap::from_iter([
@@ -631,9 +574,7 @@ mod test {
                         ]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest.clone());
                     },
                 );
             }
@@ -644,27 +585,22 @@ mod test {
                 let tpl_repo_tag = "0.1.0";
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments {
                             tpl_repo_tag: Some(tpl_repo_tag.into()),
                             ..NewCommandArguments::new(ctx.tpl.into(), ctx.name.into())
                         },
-                        fail_allowed_dirs_update: false,
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
                         vars: HashMap::from_iter([
@@ -674,37 +610,29 @@ mod test {
                         ]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
             }
 
             #[test]
-            fn ok_when_allowed_dirs_update_failed() {
+            fn ok_when_allowed_dirs_path_computing_failed() {
                 let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
                 test(
                     |ctx| Parameters {
-                        allowed_dirs_content: None,
                         args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_update: true,
+                        fail_allowed_dirs_path_computing: true,
+                        fail_allowed_dirs_updating: false,
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
                         fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
-                        fail_home_dirpath_retrieving: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
                     |ctx| Expected {
-                        allowed_dirs_filepath: ctx
-                            .home_dirpath
-                            .join(CONFIG_DIRNAME)
-                            .join(DEFAULT_ALLOWED_DIRS_FILENAME),
                         dest: dest_fn(ctx),
                         git_ref: None,
                         vars: HashMap::from_iter([
@@ -714,12 +642,47 @@ mod test {
                         ]),
                     },
                     |ctx, res| {
-                        res.unwrap();
-                        let dest = dest_fn(ctx);
-                        assert!(dest.exists());
-                        assert!(!ctx.tpl_repo_path.exists());
+                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
+            }
+
+            #[test]
+            fn ok_when_allowed_dirs_update_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: true,
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_checking_out: false,
+                        fail_git_default_value_retrieving: false,
+                        fail_git_init: true,
+                        fail_gitignore_update: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                        vars: HashMap::from_iter([
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                        ]),
+                    },
+                    |ctx, res| {
+                        assert(ctx, res, dest_fn(ctx));
+                    },
+                );
+            }
+
+            fn assert(ctx: &Context, res: Result<()>, dest: PathBuf) {
+                res.unwrap();
+                assert!(dest.exists());
+                assert!(!ctx.tpl_repo_path.exists());
             }
 
             fn test<
@@ -732,20 +695,16 @@ mod test {
                 assert_fn: A,
             ) {
                 let ctx = Context {
+                    allowed_dirs_filepath: tempdir().unwrap().into_path().join("allowed-dirs"),
                     cwd: tempdir().unwrap().into_path(),
                     name: "my-project",
                     git_email: "test@local",
                     git_username: "test",
-                    home_dirpath: tempdir().unwrap().into_path(),
                     tpl: "test",
                     tpl_repo_path: tempdir().unwrap().into_path(),
                 };
                 let params = create_params_fn(&ctx);
                 let expected = create_expected_fn(&ctx);
-                if let Some(ref content) = params.allowed_dirs_content {
-                    create_dir_all(expected.allowed_dirs_filepath.parent().unwrap()).unwrap();
-                    write(&expected.allowed_dirs_filepath, content).unwrap();
-                }
                 create_dir_all(ctx.tpl_repo_path.join(ctx.tpl)).unwrap();
                 let fs = StubFileSystem::new()
                     .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
@@ -770,30 +729,22 @@ mod test {
                             remove_dir_all(path).map_err(Error::IO)
                         }
                     })
-                    .with_stub_of_home_dirpath({
-                        let home_dirpath = ctx.home_dirpath.clone();
-                        move |_| {
-                            if params.fail_home_dirpath_retrieving {
-                                Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
-                            } else {
-                                Ok(home_dirpath.clone())
-                            }
-                        }
-                    })
                     .with_stub_of_ensure_lines({
-                        let allowed_dirs_filepath = expected.allowed_dirs_filepath.clone();
+                        let allowed_dirs_filepath = ctx.allowed_dirs_filepath.clone();
                         let dest = expected.dest.clone();
                         move |i, lines, path, lock| {
-                            if i == 0 {
+                            if i == 0 && !params.fail_allowed_dirs_path_computing {
                                 assert_eq!(lines, [dest.to_string_lossy().to_string()]);
                                 assert_eq!(path, allowed_dirs_filepath);
                                 assert!(lock);
-                                if params.fail_allowed_dirs_update {
+                                if params.fail_allowed_dirs_updating {
                                     Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
                                 } else {
                                     Ok(())
                                 }
-                            } else if i == 1 && !params.args.skip_gitignore_update {
+                            } else if i == 0 && params.fail_allowed_dirs_path_computing
+                                || i == 1 && !params.args.skip_gitignore_update
+                            {
                                 assert_eq!(lines, FILENAMES_TO_IGNORE);
                                 assert_eq!(path, dest.join(GITIGNORE_FILENAME));
                                 assert!(!lock);
@@ -849,6 +800,19 @@ mod test {
                             }
                         }
                     });
+                let paths = StubPaths::new().with_stub_of_allowed_dirs({
+                    let filepath = ctx.allowed_dirs_filepath.clone();
+                    let expected_allowed_dirs_filepath = params.args.allowed_dirs_filepath.clone();
+                    move |_, allowed_dirs_filepath, cfg_filepath| {
+                        assert_eq!(allowed_dirs_filepath, expected_allowed_dirs_filepath);
+                        assert!(cfg_filepath.is_none());
+                        if params.fail_allowed_dirs_path_computing {
+                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                        } else {
+                            Ok(filepath.clone())
+                        }
+                    }
+                });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let tpl_repo_path = ctx.tpl_repo_path.clone();
                     let expected_dest = expected.dest.clone();
@@ -873,8 +837,9 @@ mod test {
                 let cmd = NewCommand {
                     args: params.args,
                     fs: Box::new(fs),
-                    renderer: Box::new(renderer),
                     git: Box::new(git),
+                    paths: Box::new(paths),
+                    renderer: Box::new(renderer),
                 };
                 let res = cmd.run();
                 assert_fn(&ctx, res);

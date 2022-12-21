@@ -6,8 +6,8 @@ mod err;
 mod fs;
 mod git;
 mod log;
+mod paths;
 mod renderer;
-mod utils;
 
 use std::{io::stdout, process::exit};
 
