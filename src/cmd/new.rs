@@ -7,11 +7,10 @@ use log::{debug, info, warn};
 
 use crate::{
     cli::NewCommandArguments,
-    consts::LOCAL_CONFIG_FILENAME,
     err::{Error, Result},
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
-    paths::{DefaultPaths, Paths},
+    paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME},
     renderer::{LiquidRenderer, Renderer, Vars},
 };
 
