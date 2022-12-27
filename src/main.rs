@@ -22,6 +22,7 @@ fn main() {
     Logger::init(args.logging.to_level_filter(), !args.logging.no_color).unwrap();
     let mut stdout = stdout();
     let res = match args.into_command_kind() {
+        CommandKind::Destroy(cmd) => cmd.run(),
         CommandKind::Env(cmd) => cmd.run(&mut stdout),
         CommandKind::Hook(cmd) => cmd.run(&mut stdout),
         CommandKind::New(cmd) => cmd.run(),

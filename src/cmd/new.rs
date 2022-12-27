@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Formatter},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use log::{debug, info, warn};
@@ -52,14 +52,9 @@ impl NewCommand {
         let dest = self
             .args
             .dest
-            .map(|dest| {
-                debug!("Using {} as destination directory", dest.display());
-                Ok(dest)
-            })
-            .unwrap_or_else(|| {
-                debug!("No destination directory set, using current working directory as parent");
-                self.fs.cwd().map(|cwd| cwd.join(&self.args.name))
-            })?;
+            .map(Ok)
+            .unwrap_or_else(|| self.fs.cwd().map(|cwd| cwd.join(&self.args.name)))?;
+        debug!("Using {} as destination directory", dest.display());
         if dest.exists() {
             return Err(Error::DestinationDirectoryAlreadyExists(dest));
         }
@@ -92,14 +87,12 @@ impl NewCommand {
             });
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
         if res.is_ok() {
-            info!("Updating allowed directories list");
-            let res = self
-                .paths
-                .allowed_dirs(self.args.allowed_dirs_filepath, None)
-                .and_then(|path| {
-                    self.fs
-                        .ensure_lines(&[&dest.to_string_lossy()], &path, true)
-                });
+            let res = Self::update_allowed_dirs_list(
+                self.args.allowed_dirs_filepath,
+                &dest,
+                self.fs.as_ref(),
+                self.paths.as_ref(),
+            );
             if let Err(err) = res {
                 warn!("{}", err);
             }
@@ -109,7 +102,7 @@ impl NewCommand {
             }
             if !self.args.skip_gitignore_update {
                 info!("Updating gitignore");
-                if let Err(err) = self.fs.ensure_lines(
+                if let Err(err) = self.fs.ensure_lines_are_present(
                     &FILENAMES_TO_IGNORE,
                     &dest.join(GITIGNORE_FILENAME),
                     false,
@@ -128,6 +121,19 @@ impl NewCommand {
         if let Err(err) = fs.delete_dir(path) {
             warn!("Unable to delete {}: {}", path.display(), err);
         }
+    }
+
+    #[inline]
+    fn update_allowed_dirs_list(
+        allowed_dirs_filepath: Option<PathBuf>,
+        dest: &Path,
+        fs: &dyn FileSystem,
+        paths: &dyn Paths,
+    ) -> Result<()> {
+        info!("Updating allowed directories list");
+        let allowed_dirs_filepath = paths.allowed_dirs(allowed_dirs_filepath, None)?;
+        let dest = fs.canonicalize(dest)?;
+        fs.ensure_lines_are_present(&[&dest.to_string_lossy()], &allowed_dirs_filepath, true)
     }
 }
 
@@ -636,6 +642,13 @@ mod test {
                 let expected = create_expected_fn(&ctx);
                 create_dir_all(ctx.tpl_repo_path.join(ctx.tpl)).unwrap();
                 let fs = StubFileSystem::new()
+                    .with_stub_of_canonicalize({
+                        let dest = expected.dest.clone();
+                        move |_, path| {
+                            assert_eq!(path, dest);
+                            dest.canonicalize().map_err(Error::IO)
+                        }
+                    })
                     .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
                     .with_stub_of_create_temp_dir({
                         let tpl_repo_path = ctx.tpl_repo_path.clone();
@@ -658,11 +671,12 @@ mod test {
                             remove_dir_all(path).map_err(Error::IO)
                         }
                     })
-                    .with_stub_of_ensure_lines({
+                    .with_stub_of_ensure_lines_are_present({
                         let allowed_dirs_filepath = ctx.allowed_dirs_filepath.clone();
                         let dest = expected.dest.clone();
                         move |i, lines, path, lock| {
                             if i == 0 && !params.fail_allowed_dirs_path_computing {
+                                let dest = dest.canonicalize().unwrap();
                                 assert_eq!(lines, [dest.to_string_lossy().to_string()]);
                                 assert_eq!(path, allowed_dirs_filepath);
                                 assert!(lock);

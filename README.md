@@ -71,3 +71,8 @@ Example:
 ```bash
 projectctl new rs-lib my-project-name
 ```
+
+When you want to delete a project, you can run the following command to make sure everything is clean-up:
+```bash
+projectctl destroy my-project-name
+```
