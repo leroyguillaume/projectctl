@@ -1,7 +1,6 @@
 use std::{
     fmt::{self, Debug, Formatter},
     io::Write,
-    path::Path,
 };
 
 use regex::Regex;
@@ -9,9 +8,8 @@ use regex::Regex;
 use crate::{
     cfg::{ConfigLoader, DefaultConfigLoader, EnvVarKind},
     cli::EnvCommandArguments,
-    consts::{LOCAL_CONFIG_FILENAME, PROJECT_CONFIG_FILENAME},
     err::{Error, Result},
-    fs::{DefaultFileSystem, FileSystem},
+    paths::{DefaultPaths, Paths},
 };
 
 const SPECIAL_CHARS_PATTERN: &str = "[\"$]";
@@ -19,7 +17,7 @@ const SPECIAL_CHARS_PATTERN: &str = "[\"$]";
 pub struct EnvCommand {
     args: EnvCommandArguments,
     cfg_loader: Box<dyn ConfigLoader>,
-    fs: Box<dyn FileSystem>,
+    paths: Box<dyn Paths>,
 }
 
 impl EnvCommand {
@@ -27,30 +25,14 @@ impl EnvCommand {
         Self {
             args,
             cfg_loader: Box::new(DefaultConfigLoader::new()),
-            fs: Box::new(DefaultFileSystem),
+            paths: Box::new(DefaultPaths::new()),
         }
     }
 
     pub fn run(self, out: &mut dyn Write) -> Result<()> {
-        let project_dirpath = self
-            .args
-            .project_dirpath
-            .map(Ok)
-            .unwrap_or_else(|| self.fs.cwd())?;
-        let default_cfg_filepath = project_dirpath.join(PROJECT_CONFIG_FILENAME);
-        let local_cfg_filepath = project_dirpath.join(LOCAL_CONFIG_FILENAME);
-        let cfg_filepaths = if self.args.cfg_filepaths.is_empty() {
-            let mut cfg_filepaths = vec![];
-            if default_cfg_filepath.exists() {
-                cfg_filepaths.push(Path::new(&default_cfg_filepath));
-            }
-            if local_cfg_filepath.exists() {
-                cfg_filepaths.push(Path::new(&local_cfg_filepath));
-            }
-            cfg_filepaths
-        } else {
-            self.args.cfg_filepaths.iter().map(Path::new).collect()
-        };
+        let cfg_filepaths = self
+            .paths
+            .config(self.args.cfg_filepaths, self.args.project_dirpath)?;
         let cfg = self.cfg_loader.load(&cfg_filepaths)?;
         let val_regex = Regex::new(SPECIAL_CHARS_PATTERN).unwrap();
         for (key, kind) in cfg.env {
@@ -75,13 +57,13 @@ impl Debug for EnvCommand {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, fs::File, path::PathBuf};
+    use std::collections::HashMap;
 
     use tempfile::tempdir;
 
     use crate::{
         cfg::{Config, StubConfigLoader},
-        fs::StubFileSystem,
+        paths::StubPaths,
     };
 
     use super::*;
@@ -103,30 +85,19 @@ mod test {
         mod run {
             use super::*;
 
-            struct Context {
-                cwd: PathBuf,
-            }
-
-            struct Expected {
-                cfg_filepaths: Vec<PathBuf>,
-            }
-
             struct Parameters {
                 args: EnvCommandArguments,
                 env: HashMap<String, EnvVarKind>,
             }
 
             #[test]
-            fn ok_when_no_cfg() {
+            fn ok_when_default_args() {
                 test(
-                    |_| Parameters {
+                    || Parameters {
                         args: EnvCommandArguments::default(),
                         env: HashMap::new(),
                     },
-                    |_| Expected {
-                        cfg_filepaths: vec![],
-                    },
-                    |_, res| {
+                    |res| {
                         let out = res.unwrap();
                         assert!(out.is_empty());
                     },
@@ -134,58 +105,12 @@ mod test {
             }
 
             #[test]
-            fn ok_when_default_cfg() {
-                let var_key = "VAR";
-                test(
-                    |_| Parameters {
-                        args: EnvCommandArguments::default(),
-                        env: HashMap::from_iter([(
-                            var_key.into(),
-                            EnvVarKind::Literal("\"$VAL".into()),
-                        )]),
-                    },
-                    |ctx| Expected {
-                        cfg_filepaths: vec![
-                            ctx.cwd.join(PROJECT_CONFIG_FILENAME),
-                            ctx.cwd.join(LOCAL_CONFIG_FILENAME),
-                        ],
-                    },
-                    |_, res| assert_export(res, var_key, "\\\"\\$VAL"),
-                )
-            }
-
-            #[test]
-            fn ok_when_project_dirpath_is_some() {
+            fn ok_when_custom_args() {
                 let var_key = "VAR";
                 let project_dirpath = tempdir().unwrap().into_path();
+                let cfg_filepath = tempdir().unwrap().into_path().join("cfg1");
                 test(
-                    |_| Parameters {
-                        args: EnvCommandArguments {
-                            project_dirpath: Some(project_dirpath.clone()),
-                            ..EnvCommandArguments::default()
-                        },
-                        env: HashMap::from_iter([(
-                            var_key.into(),
-                            EnvVarKind::Literal("\"$VAL".into()),
-                        )]),
-                    },
-                    |_| Expected {
-                        cfg_filepaths: vec![
-                            project_dirpath.join(PROJECT_CONFIG_FILENAME),
-                            project_dirpath.join(LOCAL_CONFIG_FILENAME),
-                        ],
-                    },
-                    |_, res| assert_export(res, var_key, "\\\"\\$VAL"),
-                )
-            }
-
-            #[test]
-            fn ok_when_cfg_filepaths_is_not_empty() {
-                let var_key = "VAR";
-                let project_dirpath = tempdir().unwrap().into_path();
-                let cfg_filepath = tempdir().unwrap().into_path().join(PROJECT_CONFIG_FILENAME);
-                test(
-                    |_| Parameters {
+                    || Parameters {
                         args: EnvCommandArguments {
                             cfg_filepaths: vec![cfg_filepath.clone()],
                             project_dirpath: Some(project_dirpath.clone()),
@@ -195,54 +120,47 @@ mod test {
                             EnvVarKind::Literal("\"$VAL".into()),
                         )]),
                     },
-                    |_| Expected {
-                        cfg_filepaths: vec![cfg_filepath.clone()],
-                    },
-                    |_, res| assert_export(res, var_key, "\\\"\\$VAL"),
+                    |res| assert_export(res, var_key, "\\\"\\$VAL"),
                 )
             }
 
-            fn assert_export(res: crate::err::Result<String>, var_key: &str, var_val: &str) {
+            fn assert_export(res: Result<String>, var_key: &str, var_val: &str) {
                 let out = res.unwrap();
                 let expected_out = format!("export {}=\"{}\"\n", var_key, var_val);
                 assert_eq!(out, expected_out);
             }
 
-            fn test<
-                P: Fn(&Context) -> Parameters,
-                E: Fn(&Context) -> Expected,
-                A: Fn(&Context, crate::err::Result<String>),
-            >(
+            fn test<P: Fn() -> Parameters, A: Fn(Result<String>)>(
                 create_params_fn: P,
-                create_expected_fn: E,
                 assert_fn: A,
             ) {
-                let ctx = Context {
-                    cwd: tempdir().unwrap().into_path(),
-                };
-                let params = create_params_fn(&ctx);
-                let expected = create_expected_fn(&ctx);
-                for filepath in expected.cfg_filepaths.iter() {
-                    File::create(filepath).unwrap();
-                }
-                let cfg_loader = StubConfigLoader::new().with_stub_of_load(move |_, filepaths| {
-                    assert_eq!(filepaths, expected.cfg_filepaths);
-                    Ok(Config {
-                        env: params.env.clone(),
-                    })
+                let params = create_params_fn();
+                let cfg_loader = StubConfigLoader::new().with_stub_of_load({
+                    let cfg_filepaths = params.args.cfg_filepaths.clone();
+                    move |_, filepaths| {
+                        assert_eq!(filepaths, cfg_filepaths);
+                        Ok(Config {
+                            env: params.env.clone(),
+                        })
+                    }
                 });
-                let fs = StubFileSystem::new().with_stub_of_cwd({
-                    let cwd = ctx.cwd.clone();
-                    move |_| Ok(cwd.clone())
+                let paths = StubPaths::new().with_stub_of_config({
+                    let expected_cfg_filepaths = params.args.cfg_filepaths.clone();
+                    let expected_project_dirpath = params.args.project_dirpath.clone();
+                    move |_, cfg_filepaths, project_dirpath| {
+                        assert_eq!(cfg_filepaths, expected_cfg_filepaths);
+                        assert_eq!(project_dirpath, expected_project_dirpath);
+                        Ok(cfg_filepaths)
+                    }
                 });
                 let cmd = EnvCommand {
                     args: params.args,
                     cfg_loader: Box::new(cfg_loader),
-                    fs: Box::new(fs),
+                    paths: Box::new(paths),
                 };
                 let mut out = vec![];
                 let res = cmd.run(&mut out).map(|_| String::from_utf8(out).unwrap());
-                assert_fn(&ctx, res);
+                assert_fn(res);
             }
         }
     }

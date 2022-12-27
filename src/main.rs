@@ -1,7 +1,6 @@
 mod cfg;
 mod cli;
 mod cmd;
-mod consts;
 mod err;
 mod fs;
 mod git;

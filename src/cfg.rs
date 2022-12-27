@@ -1,4 +1,9 @@
-use std::{borrow::Cow, collections::HashMap, fs::OpenOptions, path::Path};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
 
 use jsonschema::{JSONSchema, ValidationError};
 use log::{debug, info, trace, warn};
@@ -27,7 +32,7 @@ pub enum EnvVarKind {
 
 #[cfg_attr(test, stub)]
 pub trait ConfigLoader {
-    fn load(&self, filepaths: &[&Path]) -> Result<Config>;
+    fn load(&self, filepaths: &[PathBuf]) -> Result<Config>;
 }
 
 pub struct DefaultConfigLoader {
@@ -112,7 +117,7 @@ impl DefaultConfigLoader {
 }
 
 impl ConfigLoader for DefaultConfigLoader {
-    fn load(&self, filepaths: &[&Path]) -> Result<Config> {
+    fn load(&self, filepaths: &[PathBuf]) -> Result<Config> {
         let mut cfg = Config::default();
         trace!("Loading configuration JSON schema");
         let schema_val = serde_json::from_str(JSON_SCHEMA).unwrap();
@@ -225,7 +230,7 @@ mod test {
                 let loader = DefaultConfigLoader {
                     fs: Box::new(DefaultFileSystem),
                 };
-                let res = loader.load(&[&ctx.cfg1_filepath, &ctx.cfg2_filepath]);
+                let res = loader.load(&[ctx.cfg1_filepath.clone(), ctx.cfg2_filepath.clone()]);
                 assert_fn(&ctx, res);
             }
         }
