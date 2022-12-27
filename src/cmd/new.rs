@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Formatter},
     path::Path,
 };
@@ -11,7 +12,7 @@ use crate::{
     fs::{DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
     paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME},
-    renderer::{LiquidRenderer, Renderer, Vars},
+    renderer::{LiquidRenderer, Renderer},
 };
 
 const DESCRIPTION_VAR_KEY: &str = "description";
@@ -31,6 +32,7 @@ pub struct NewCommand {
     git: Box<dyn Git>,
     paths: Box<dyn Paths>,
     renderer: Box<dyn Renderer>,
+    vars_loader: Box<dyn VariablesLoader>,
 }
 
 impl NewCommand {
@@ -41,6 +43,7 @@ impl NewCommand {
             git: Box::new(DefaultGit::new()),
             paths: Box::new(DefaultPaths::new()),
             renderer: Box::new(LiquidRenderer::new()),
+            vars_loader: Box::new(DefaultVariablesLoader::new()),
         }
     }
 
@@ -79,12 +82,9 @@ impl NewCommand {
             .and_then(|_| {
                 let tpl_dirpath = tpl_repo_path.join(&self.args.tpl);
                 if tpl_dirpath.is_dir() {
-                    let vars = Self::create_vars(
-                        self.args.name,
-                        self.args.desc,
-                        self.args.vars,
-                        self.git.as_ref(),
-                    );
+                    let vars =
+                        self.vars_loader
+                            .load(self.args.name, self.args.desc, self.args.vars);
                     self.renderer.render_recursively(&tpl_dirpath, &dest, vars)
                 } else {
                     Err(Error::TemplateNotFound(self.args.tpl))
@@ -124,66 +124,80 @@ impl NewCommand {
     }
 
     #[inline]
-    fn create_vars(
-        name: String,
-        desc: Option<String>,
-        cli_vars: Vec<(String, String)>,
-        git: &dyn Git,
-    ) -> Vars {
-        let mut vars = Vars::new();
-        Self::inject_var(NAME_VAR_NAME.into(), name, &mut vars);
-        if let Some(desc) = desc {
-            Self::inject_var(DESCRIPTION_VAR_KEY.into(), desc, &mut vars);
-        }
-        Self::inject_git_var(
-            GIT_USER_NAME_VAR_KEY,
-            GIT_USER_NAME_CONFIG_KEY,
-            &mut vars,
-            git,
-        );
-        Self::inject_git_var(
-            GIT_USER_EMAIL_VAR_KEY,
-            GIT_USER_EMAIL_CONFIG_KEY,
-            &mut vars,
-            git,
-        );
-        for (key, val) in cli_vars {
-            Self::inject_var(key, val, &mut vars);
-        }
-        vars
-    }
-
-    #[inline]
     fn delete_dir(path: &Path, fs: &dyn FileSystem) {
         if let Err(err) = fs.delete_dir(path) {
             warn!("Unable to delete {}: {}", path.display(), err);
         }
     }
+}
 
-    #[inline]
-    fn inject_git_var(key: &str, git_cfg_key: &str, vars: &mut Vars, git: &dyn Git) {
-        match git.default_config_value(git_cfg_key) {
-            Ok(val) => Self::inject_var(key.into(), val, vars),
-            Err(err) => warn!("{}", err),
+impl Debug for NewCommand {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("NewCommand")
+            .field("args", &self.args)
+            .finish()
+    }
+}
+
+#[cfg_attr(test, stub_trait::stub)]
+trait VariablesLoader {
+    fn load(
+        &self,
+        name: String,
+        desc: Option<String>,
+        overrides: Vec<(String, String)>,
+    ) -> HashMap<String, String>;
+}
+
+struct DefaultVariablesLoader {
+    git: Box<dyn Git>,
+}
+
+impl DefaultVariablesLoader {
+    fn new() -> Self {
+        Self {
+            git: Box::new(DefaultGit::new()),
         }
     }
 
-    #[inline]
-    fn inject_var(key: String, val: String, vars: &mut Vars) {
-        if let Some(prev_value) = vars.insert(key.clone(), val.clone()) {
-            warn!(
-                "Variable `{}` is overriden (`{}` over `{}`)",
-                key, val, prev_value
-            );
+    fn load_git_var(var_key: &str, git: &dyn Git) -> Option<String> {
+        match git.default_config_value(var_key) {
+            Ok(val) => Some(val),
+            Err(err) => {
+                warn!("{}", err);
+                None
+            }
         }
     }
 }
 
-impl Debug for NewCommand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NewCommand")
-            .field("args", &self.args)
-            .finish()
+impl VariablesLoader for DefaultVariablesLoader {
+    fn load(
+        &self,
+        name: String,
+        desc: Option<String>,
+        overrides: Vec<(String, String)>,
+    ) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+        vars.insert(NAME_VAR_NAME.into(), name);
+        if let Some(desc) = desc {
+            vars.insert(DESCRIPTION_VAR_KEY.into(), desc);
+        }
+        if let Some(val) = Self::load_git_var(GIT_USER_NAME_CONFIG_KEY, self.git.as_ref()) {
+            vars.insert(GIT_USER_NAME_VAR_KEY.into(), val);
+        }
+        if let Some(val) = Self::load_git_var(GIT_USER_EMAIL_CONFIG_KEY, self.git.as_ref()) {
+            vars.insert(GIT_USER_EMAIL_VAR_KEY.into(), val);
+        }
+        for (key, val) in overrides {
+            if let Some(prev_val) = vars.insert(key.clone(), val.clone()) {
+                warn!(
+                    "`{}` overriden by `{}` (previous value: `{}`)",
+                    key, val, prev_val
+                );
+            }
+        }
+        vars
     }
 }
 
@@ -226,17 +240,15 @@ mod test {
             struct Context {
                 allowed_dirs_filepath: PathBuf,
                 cwd: PathBuf,
-                git_email: &'static str,
-                git_username: &'static str,
                 name: &'static str,
                 tpl: &'static str,
                 tpl_repo_path: PathBuf,
+                vars: HashMap<String, String>,
             }
 
             struct Expected {
                 dest: PathBuf,
                 git_ref: Option<Reference>,
-                vars: HashMap<String, String>,
             }
 
             struct Parameters {
@@ -246,7 +258,6 @@ mod test {
                 fail_cwd: bool,
                 fail_dir_deletion: bool,
                 fail_git_checking_out: bool,
-                fail_git_default_value_retrieving: bool,
                 fail_git_init: bool,
                 fail_gitignore_update: bool,
                 fail_rendering: bool,
@@ -267,7 +278,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -276,7 +286,6 @@ mod test {
                     |_| Expected {
                         dest: dest.clone(),
                         git_ref: None,
-                        vars: HashMap::new(),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::DestinationDirectoryAlreadyExists(path) => assert_eq!(path, dest),
@@ -299,7 +308,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: true,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -308,7 +316,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::new(),
                     },
                     |ctx, res| {
                         match res.unwrap_err() {
@@ -334,7 +341,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -343,7 +349,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::new(),
                     },
                     |ctx, res| {
                         let expected_tpl = tpl_fn(ctx);
@@ -370,7 +375,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: true,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -379,7 +383,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::new(),
                     },
                     |ctx, res| {
                         let expected_tpl = tpl_fn(ctx);
@@ -405,7 +408,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
                         fail_rendering: true,
@@ -414,11 +416,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         match res.unwrap_err() {
@@ -428,34 +425,6 @@ mod test {
                         let dest = dest_fn(ctx);
                         assert!(!dest.exists());
                         assert!(!ctx.tpl_repo_path.exists());
-                    },
-                );
-            }
-
-            #[test]
-            fn ok_when_git_default_value_retrieving_failed() {
-                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
-                test(
-                    |ctx| Parameters {
-                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
-                        fail_allowed_dirs_path_computing: false,
-                        fail_allowed_dirs_updating: false,
-                        fail_cwd: false,
-                        fail_dir_deletion: false,
-                        fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: true,
-                        fail_git_init: false,
-                        fail_gitignore_update: false,
-                        fail_rendering: false,
-                        gitignore_content: None,
-                    },
-                    |ctx| Expected {
-                        dest: dest_fn(ctx),
-                        git_ref: None,
-                        vars: HashMap::from_iter([(NAME_VAR_NAME.into(), ctx.name.into())]),
-                    },
-                    |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
                     },
                 );
             }
@@ -471,7 +440,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -480,11 +448,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest_fn(ctx));
@@ -503,7 +466,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: false,
                         fail_gitignore_update: true,
                         fail_rendering: false,
@@ -512,11 +474,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest_fn(ctx));
@@ -555,22 +512,14 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
                         fail_rendering: false,
                         gitignore_content: None,
                     },
-                    |ctx| Expected {
+                    |_| Expected {
                         dest: dest.clone(),
                         git_ref: Some(Reference::Branch(tpl_repo_branch.into())),
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                            (DESCRIPTION_VAR_KEY.into(), desc.into()),
-                            (var_key.into(), var_val.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest.clone());
@@ -593,7 +542,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -602,11 +550,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest_fn(ctx));
@@ -625,7 +568,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -634,11 +576,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest_fn(ctx));
@@ -657,7 +594,6 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_default_value_retrieving: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
                         fail_rendering: false,
@@ -666,11 +602,6 @@ mod test {
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
-                        vars: HashMap::from_iter([
-                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
-                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
-                            (NAME_VAR_NAME.into(), ctx.name.into()),
-                        ]),
                     },
                     |ctx, res| {
                         assert(ctx, res, dest_fn(ctx));
@@ -697,10 +628,9 @@ mod test {
                     allowed_dirs_filepath: tempdir().unwrap().into_path().join("allowed-dirs"),
                     cwd: tempdir().unwrap().into_path(),
                     name: "my-project",
-                    git_email: "test@local",
-                    git_username: "test",
                     tpl: "test",
                     tpl_repo_path: tempdir().unwrap().into_path(),
+                    vars: HashMap::from_iter([("key".into(), "val".into())]),
                 };
                 let params = create_params_fn(&ctx);
                 let expected = create_expected_fn(&ctx);
@@ -772,22 +702,6 @@ mod test {
                             }
                         }
                     })
-                    .with_stub_of_default_config_value(move |i, key| {
-                        let val = if i == 0 {
-                            assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
-                            ctx.git_username
-                        } else if i == 1 {
-                            assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
-                            ctx.git_email
-                        } else {
-                            panic!("unexpected key `{}`", key);
-                        };
-                        if params.fail_git_default_value_retrieving {
-                            Err(Error::Git(git2::Error::from_str("error")))
-                        } else {
-                            Ok(val.into())
-                        }
-                    })
                     .with_stub_of_init({
                         let expected_dest = expected.dest.clone();
                         move |_, path| {
@@ -814,12 +728,12 @@ mod test {
                 });
                 let renderer = StubRenderer::new().with_stub_of_render_recursively({
                     let tpl_repo_path = ctx.tpl_repo_path.clone();
-                    let expected_dest = expected.dest.clone();
                     let tpl = params.args.tpl.clone();
+                    let expected_vars = ctx.vars.clone();
                     move |_, tpl_dirpath, dest, vars| {
                         assert_eq!(tpl_dirpath, tpl_repo_path.join(&tpl));
-                        assert_eq!(dest, expected_dest);
-                        assert_eq!(vars, expected.vars);
+                        assert_eq!(dest, expected.dest);
+                        assert_eq!(vars, expected_vars);
                         if params.fail_rendering {
                             Err(Error::Liquid {
                                 cause: liquid::Error::with_msg("error"),
@@ -833,15 +747,149 @@ mod test {
                         }
                     }
                 });
+                let vars_loader = StubVariablesLoader::new().with_stub_of_load({
+                    let expected_desc = params.args.desc.clone();
+                    let expected_overrides = params.args.vars.clone();
+                    let vars = ctx.vars.clone();
+                    move |_, name, desc, overrides| {
+                        assert_eq!(name, ctx.name);
+                        assert_eq!(desc, expected_desc);
+                        assert_eq!(overrides, expected_overrides);
+                        vars.clone()
+                    }
+                });
                 let cmd = NewCommand {
                     args: params.args,
                     fs: Box::new(fs),
                     git: Box::new(git),
                     paths: Box::new(paths),
                     renderer: Box::new(renderer),
+                    vars_loader: Box::new(vars_loader),
                 };
                 let res = cmd.run();
                 assert_fn(&ctx, res);
+            }
+        }
+    }
+
+    mod default_variables_loader {
+        use super::*;
+
+        mod load {
+            use super::*;
+
+            struct Context {
+                git_email: &'static str,
+                git_username: &'static str,
+                name: &'static str,
+            }
+
+            struct Parameters {
+                desc: Option<String>,
+                fail_git_username_retrieving: bool,
+                fail_git_email_retrieving: bool,
+                overrides: Vec<(String, String)>,
+            }
+
+            #[test]
+            fn vars_when_git_username_retrieving_failed() {
+                test(
+                    |_| Parameters {
+                        desc: None,
+                        fail_git_email_retrieving: false,
+                        fail_git_username_retrieving: true,
+                        overrides: vec![],
+                    },
+                    |ctx, vars| {
+                        let expected_vars: HashMap<String, String> = HashMap::from_iter([
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                        ]);
+                        assert_eq!(vars, expected_vars);
+                    },
+                )
+            }
+
+            #[test]
+            fn vars_when_git_email_retrieving_failed() {
+                test(
+                    |_| Parameters {
+                        desc: None,
+                        fail_git_email_retrieving: true,
+                        fail_git_username_retrieving: false,
+                        overrides: vec![],
+                    },
+                    |ctx, vars| {
+                        let expected_vars: HashMap<String, String> = HashMap::from_iter([
+                            (NAME_VAR_NAME.into(), ctx.name.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                        ]);
+                        assert_eq!(vars, expected_vars);
+                    },
+                )
+            }
+
+            #[test]
+            fn vars_when_custom_args() {
+                let name_fn = |ctx: &Context| -> String { format!("{}2", ctx.name) };
+                let desc = "description";
+                let var_key = "key";
+                let var_val = "val";
+                test(
+                    |ctx| Parameters {
+                        desc: Some(desc.into()),
+                        fail_git_email_retrieving: false,
+                        fail_git_username_retrieving: false,
+                        overrides: vec![
+                            (NAME_VAR_NAME.into(), name_fn(ctx)),
+                            (var_key.into(), var_val.into()),
+                        ],
+                    },
+                    |ctx, vars| {
+                        let expected_vars: HashMap<String, String> = HashMap::from_iter([
+                            (NAME_VAR_NAME.into(), name_fn(ctx)),
+                            (DESCRIPTION_VAR_KEY.into(), desc.into()),
+                            (GIT_USER_NAME_VAR_KEY.into(), ctx.git_username.into()),
+                            (GIT_USER_EMAIL_VAR_KEY.into(), ctx.git_email.into()),
+                            (var_key.into(), var_val.into()),
+                        ]);
+                        assert_eq!(vars, expected_vars);
+                    },
+                )
+            }
+
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, HashMap<String, String>)>(
+                create_params_fn: P,
+                assert_fn: A,
+            ) {
+                let ctx = Context {
+                    git_email: "user@test",
+                    git_username: "test",
+                    name: "my-project",
+                };
+                let params = create_params_fn(&ctx);
+                let git = StubGit::new().with_stub_of_default_config_value(move |i, key| {
+                    if i == 0 {
+                        assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
+                        if params.fail_git_username_retrieving {
+                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                        } else {
+                            Ok(ctx.git_username.into())
+                        }
+                    } else if i == 1 {
+                        assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
+                        if params.fail_git_email_retrieving {
+                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                        } else {
+                            Ok(ctx.git_email.into())
+                        }
+                    } else {
+                        panic!("unexpected call of default_config_value");
+                    }
+                });
+                let loader = DefaultVariablesLoader { git: Box::new(git) };
+                let vars = loader.load(ctx.name.into(), params.desc, params.overrides);
+                assert_fn(&ctx, vars);
             }
         }
     }
