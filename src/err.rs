@@ -12,7 +12,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
-    DestinationDirectoryAlreadyExists(PathBuf),
     Git(git2::Error),
     HomeNotFound,
     IO(io::Error),
@@ -36,7 +35,6 @@ pub enum Error {
 impl Error {
     pub fn to_return_code(&self) -> i32 {
         match self {
-            Self::DestinationDirectoryAlreadyExists(_) => exitcode::IOERR,
             Self::Git(_) => exitcode::SOFTWARE,
             Self::HomeNotFound => exitcode::UNAVAILABLE,
             Self::IO(_) => exitcode::IOERR,
@@ -53,9 +51,6 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Self::DestinationDirectoryAlreadyExists(path) => {
-                write!(f, "Directory {} already exists", path.display())
-            }
             Self::Git(err) => write!(f, "git: {}", err),
             Self::HomeNotFound => write!(f, "Home directory not found"),
             Self::IO(err) => write!(f, "{}", err),
@@ -100,16 +95,6 @@ mod test {
 
             struct Parameters {
                 err: Error,
-            }
-
-            #[test]
-            fn destination_directory_already_exists() {
-                test(
-                    || Parameters {
-                        err: Error::DestinationDirectoryAlreadyExists("/".into()),
-                    },
-                    |rc| assert_eq!(rc, exitcode::IOERR),
-                );
             }
 
             #[test]
@@ -228,18 +213,6 @@ mod test {
 
         struct Parameters {
             err: Error,
-        }
-
-        #[test]
-        fn destination_directory_already_exists() {
-            let path = Path::new("/");
-            let expected_str = format!("Directory {} already exists", path.display());
-            test(
-                || Parameters {
-                    err: Error::DestinationDirectoryAlreadyExists(path.to_path_buf()),
-                },
-                |str| assert_eq!(str, expected_str),
-            );
         }
 
         #[test]
