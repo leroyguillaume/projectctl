@@ -8,13 +8,43 @@ use std::{
 use fs2::FileExt;
 use home::home_dir;
 use log::{debug, trace};
-#[cfg(test)]
-use stub_trait::stub;
 use tempfile::tempdir;
 
 use crate::err::{Error, Result};
 
-#[cfg_attr(test, stub)]
+macro_rules! write_into {
+    ($path:expr, $file:expr, $($arg:tt)*) => {
+        std::write!($file, $($arg)*).map_err(|err| {
+            crate::err::Error::IO(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "Unable to write into file {}: {}",
+                    $path.display(),
+                    err,
+                ),
+            ))
+        })
+    };
+}
+pub(crate) use write_into;
+
+macro_rules! writeln_into {
+    ($path:expr, $file:expr, $($arg:tt)*) => {
+        std::writeln!($file, $($arg)*).map_err(|err| {
+            crate::err::Error::IO(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "Unable to write into file {}: {}",
+                    $path.display(),
+                    err,
+                ),
+            ))
+        })
+    };
+}
+pub(crate) use writeln_into;
+
+#[cfg_attr(test, stub_trait::stub)]
 pub trait FileSystem {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
         trace!("Canonicalizing {}", path.display());
@@ -133,17 +163,7 @@ impl FileSystem for DefaultFileSystem {
             )?;
             for line in content.lines() {
                 if !lines.contains(&line) {
-                    writeln!(&mut file, "{}", line).map_err(|err| {
-                        Error::IO(io::Error::new(
-                            err.kind(),
-                            format!(
-                                "Unable to write line `{}` in file {}: {}",
-                                line,
-                                path.display(),
-                                err
-                            ),
-                        ))
-                    })?;
+                    writeln_into!(path, &mut file, "{}", line)?;
                 }
             }
         } else {
@@ -188,17 +208,7 @@ impl FileSystem for DefaultFileSystem {
                 lock,
             )?;
             for line in content_lines {
-                writeln!(&mut file, "{}", line).map_err(|err| {
-                    Error::IO(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "Unable to write line `{}` in file {}: {}",
-                            line,
-                            path.display(),
-                            err
-                        ),
-                    ))
-                })?;
+                writeln_into!(path, &mut file, "{}", line)?;
             }
         }
         Ok(())
@@ -256,7 +266,7 @@ impl FileSystem for DefaultFileSystem {
 
 #[cfg(test)]
 mod test {
-    use std::{fs::write, io::Write};
+    use std::fs::write;
 
     use super::*;
 

@@ -191,6 +191,12 @@ pub struct NewCommandArguments {
     pub name: String,
 
     #[clap(
+        help = "Don't create configuration examples if they don't exist",
+        long = "skip-config-examples"
+    )]
+    pub skip_config_examples: bool,
+
+    #[clap(
         help = "Don't update gitignore if it doesn't contain projectctl files",
         long = "skip-gitignore"
     )]
@@ -239,12 +245,13 @@ impl NewCommandArguments {
             allowed_dirs_filepath: None,
             desc: None,
             dest: None,
+            name,
+            skip_config_examples: false,
+            skip_gitignore_update: false,
+            tpl,
             tpl_repo_url: DEFAULT_TPL_GIT_REPO_URL.into(),
             tpl_repo_branch: None,
             tpl_repo_tag: None,
-            name,
-            skip_gitignore_update: false,
-            tpl,
             vars: vec![],
         }
     }

@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Formatter},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -9,9 +11,9 @@ use log::{debug, info, warn};
 use crate::{
     cli::NewCommandArguments,
     err::{Error, Result},
-    fs::{DefaultFileSystem, FileSystem},
+    fs::{write_into, DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
-    paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME},
+    paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME, PROJECT_CONFIG_FILENAME},
     renderer::{LiquidRenderer, Renderer},
 };
 
@@ -25,6 +27,9 @@ const GIT_USER_NAME_CONFIG_KEY: &str = "user.name";
 
 const GITIGNORE_FILENAME: &str = ".gitignore";
 const FILENAMES_TO_IGNORE: [&str; 1] = [LOCAL_CONFIG_FILENAME];
+
+const LOCAL_CONFIG_EXAMPLE: &str = include_str!("../../resources/main/examples/local.yml");
+const PROJECT_CONFIG_EXAMPLE: &str = include_str!("../../resources/main/examples/project.yml");
 
 pub struct NewCommand {
     args: NewCommandArguments,
@@ -110,10 +115,50 @@ impl NewCommand {
                     warn!("{}", err);
                 }
             }
+            if !self.args.skip_config_examples {
+                info!("Creating configuration examples");
+                let res = Self::create_example_config(
+                    &dest,
+                    PROJECT_CONFIG_FILENAME,
+                    PROJECT_CONFIG_EXAMPLE,
+                    self.fs.as_ref(),
+                );
+                if let Err(err) = res {
+                    warn!("{}", err);
+                }
+                let res = Self::create_example_config(
+                    &dest,
+                    LOCAL_CONFIG_FILENAME,
+                    LOCAL_CONFIG_EXAMPLE,
+                    self.fs.as_ref(),
+                );
+                if let Err(err) = res {
+                    warn!("{}", err);
+                }
+            }
         } else {
             Self::delete_dir(&dest, self.fs.as_ref());
         }
         res
+    }
+
+    #[inline]
+    fn create_example_config(
+        dest: &Path,
+        filename: &str,
+        content: &str,
+        fs: &dyn FileSystem,
+    ) -> Result<()> {
+        let filepath = dest.join(filename);
+        if !filepath.exists() {
+            let mut file = fs.open(
+                &filepath,
+                OpenOptions::new().create(true).write(true).to_owned(),
+                false,
+            )?;
+            write_into!(dest, &mut file, "{}", content)?;
+        }
+        Ok(())
     }
 
     #[inline]
@@ -211,7 +256,7 @@ impl VariablesLoader for DefaultVariablesLoader {
 mod test {
     use std::{
         collections::HashMap,
-        fs::{create_dir_all, remove_dir_all, write},
+        fs::{create_dir_all, read_to_string, remove_dir_all, write},
         io::{self},
         path::PathBuf,
     };
@@ -266,8 +311,12 @@ mod test {
                 fail_git_checking_out: bool,
                 fail_git_init: bool,
                 fail_gitignore_update: bool,
+                fail_local_cfg_creation: bool,
+                fail_project_cfg_creation: bool,
                 fail_rendering: bool,
                 gitignore_content: Option<String>,
+                local_cfg_content: Option<&'static str>,
+                project_cfg_content: Option<&'static str>,
             }
 
             #[test]
@@ -286,8 +335,12 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |_| Expected {
                         dest: dest.clone(),
@@ -316,8 +369,12 @@ mod test {
                         fail_git_checking_out: true,
                         fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -349,8 +406,12 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -383,8 +444,12 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -416,8 +481,12 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: true,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
@@ -448,15 +517,25 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: true,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
                     },
                 );
             }
@@ -474,15 +553,25 @@ mod test {
                         fail_git_checking_out: false,
                         fail_git_init: false,
                         fail_gitignore_update: true,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
                     },
                 );
             }
@@ -502,11 +591,12 @@ mod test {
                             allowed_dirs_filepath: Some(allowed_dirs_filepath.clone()),
                             desc: Some(desc.into()),
                             dest: Some(dest.clone()),
+                            name: ctx.name.into(),
+                            skip_config_examples: true,
+                            skip_gitignore_update: true,
                             tpl_repo_url: tpl_repo_url.into(),
                             tpl_repo_branch: Some(tpl_repo_branch.into()),
                             tpl_repo_tag: None,
-                            name: ctx.name.into(),
-                            skip_gitignore_update: true,
                             tpl: ctx.tpl.into(),
                             vars: vec![
                                 (var_key.into(), format!("{}2", var_val)),
@@ -518,17 +608,21 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_init: true,
+                        fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |_| Expected {
                         dest: dest.clone(),
                         git_ref: Some(Reference::Branch(tpl_repo_branch.into())),
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest.clone());
+                        assert(ctx, res, dest.clone(), None, None);
                     },
                 );
             }
@@ -548,17 +642,27 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_init: true,
+                        fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: Some(Reference::Tag(tpl_repo_tag.into())),
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
                     },
                 );
             }
@@ -574,17 +678,27 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_init: true,
+                        fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
                     },
                 );
             }
@@ -600,25 +714,187 @@ mod test {
                         fail_cwd: false,
                         fail_dir_deletion: false,
                         fail_git_checking_out: false,
-                        fail_git_init: true,
+                        fail_git_init: false,
                         fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
                         fail_rendering: false,
                         gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
                     },
                     |ctx| Expected {
                         dest: dest_fn(ctx),
                         git_ref: None,
                     },
                     |ctx, res| {
-                        assert(ctx, res, dest_fn(ctx));
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
                     },
                 );
             }
 
-            fn assert(ctx: &Context, res: Result<()>, dest: PathBuf) {
+            #[test]
+            fn ok_when_project_cfg_creation_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: true,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                    },
+                    |ctx, res| {
+                        assert(ctx, res, dest_fn(ctx), None, Some(LOCAL_CONFIG_EXAMPLE));
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_local_cfg_creation_failed() {
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_gitignore_update: false,
+                        fail_local_cfg_creation: true,
+                        fail_project_cfg_creation: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: None,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                    },
+                    |ctx, res| {
+                        assert(ctx, res, dest_fn(ctx), Some(PROJECT_CONFIG_EXAMPLE), None);
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_project_cfg_exists() {
+                let project_cfg_content = "env:";
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                        local_cfg_content: None,
+                        project_cfg_content: Some(project_cfg_content),
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                    },
+                    |ctx, res| {
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(project_cfg_content),
+                            Some(LOCAL_CONFIG_EXAMPLE),
+                        );
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_local_cfg_exists() {
+                let local_cfg_content = "env:";
+                let dest_fn = |ctx: &Context| -> PathBuf { ctx.cwd.join(ctx.name) };
+                test(
+                    |ctx| Parameters {
+                        args: NewCommandArguments::new(ctx.tpl.into(), ctx.name.into()),
+                        fail_allowed_dirs_path_computing: false,
+                        fail_allowed_dirs_updating: false,
+                        fail_cwd: false,
+                        fail_dir_deletion: false,
+                        fail_git_checking_out: false,
+                        fail_git_init: false,
+                        fail_gitignore_update: false,
+                        fail_local_cfg_creation: false,
+                        fail_project_cfg_creation: false,
+                        fail_rendering: false,
+                        gitignore_content: None,
+                        local_cfg_content: Some(local_cfg_content),
+                        project_cfg_content: None,
+                    },
+                    |ctx| Expected {
+                        dest: dest_fn(ctx),
+                        git_ref: None,
+                    },
+                    |ctx, res| {
+                        assert(
+                            ctx,
+                            res,
+                            dest_fn(ctx),
+                            Some(PROJECT_CONFIG_EXAMPLE),
+                            Some(local_cfg_content),
+                        );
+                    },
+                );
+            }
+
+            fn assert(
+                ctx: &Context,
+                res: Result<()>,
+                dest: PathBuf,
+                project_cfg_content: Option<&str>,
+                local_cfg_content: Option<&str>,
+            ) {
                 res.unwrap();
                 assert!(dest.exists());
                 assert!(!ctx.tpl_repo_path.exists());
+                assert_file(&dest, PROJECT_CONFIG_FILENAME, project_cfg_content);
+                assert_file(&dest, LOCAL_CONFIG_FILENAME, local_cfg_content);
+            }
+
+            fn assert_file(dest: &Path, filename: &str, expected_content: Option<&str>) {
+                let filepath = dest.join(filename);
+                if let Some(expected_content) = expected_content {
+                    let content = read_to_string(filepath).unwrap();
+                    assert_eq!(content, expected_content);
+                } else {
+                    assert!(!filepath.exists());
+                }
             }
 
             fn test<
@@ -697,6 +973,29 @@ mod test {
                                     Ok(())
                                 }
                             } else {
+                                panic!("unexpected call of ensure_lines_are_present");
+                            }
+                        }
+                    })
+                    .with_stub_of_open({
+                        let dest = expected.dest.clone();
+                        move |i, path, opts, lock| {
+                            assert!(!lock);
+                            if i == 0 && params.project_cfg_content.is_none() {
+                                assert_eq!(path, dest.join(PROJECT_CONFIG_FILENAME));
+                                if params.fail_project_cfg_creation {
+                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                } else {
+                                    opts.open(path).map_err(Error::IO)
+                                }
+                            } else if i == 1 || i == 0 && params.project_cfg_content.is_some() {
+                                assert_eq!(path, dest.join(LOCAL_CONFIG_FILENAME));
+                                if params.fail_local_cfg_creation {
+                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                } else {
+                                    opts.open(path).map_err(Error::IO)
+                                }
+                            } else {
                                 panic!("unexpected call of open");
                             }
                         }
@@ -756,6 +1055,12 @@ mod test {
                         } else {
                             if let Some(ref content) = params.gitignore_content {
                                 write(dest.join(GITIGNORE_FILENAME), content).unwrap();
+                            }
+                            if let Some(content) = params.project_cfg_content {
+                                write(dest.join(PROJECT_CONFIG_FILENAME), content).unwrap();
+                            }
+                            if let Some(content) = params.local_cfg_content {
+                                write(dest.join(LOCAL_CONFIG_FILENAME), content).unwrap();
                             }
                             Ok(())
                         }

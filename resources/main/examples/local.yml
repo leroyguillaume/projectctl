@@ -1,0 +1,4 @@
+# Define in this file local project configuration
+---
+env:
+  # MY_VAR: MY_VALUE
