@@ -154,7 +154,7 @@ mod test {
             }
 
             #[test]
-            fn err_when_yaml_is_malformed() {
+            fn err_when_yml_is_malformed() {
                 test(
                     |_| Parameters {
                         cfg1_content: "{".into(),
@@ -168,7 +168,7 @@ mod test {
             }
 
             #[test]
-            fn err_when_config_is_invalid() {
+            fn err_when_file_is_invalid() {
                 test(
                     |_| Parameters {
                         cfg1_content: "key: value".into(),
@@ -182,7 +182,24 @@ mod test {
             }
 
             #[test]
-            fn ok() {
+            fn ok_when_files_are_empty() {
+                test(
+                    |_| Parameters {
+                        cfg1_content: "---".into(),
+                        cfg2_content: "---".into(),
+                    },
+                    |_, res| {
+                        let expected_cfg = Config {
+                            env: HashMap::new(),
+                        };
+                        let cfg = res.unwrap();
+                        assert_eq!(cfg, expected_cfg);
+                    },
+                );
+            }
+
+            #[test]
+            fn ok_when_files_are_not_empty() {
                 let var1_key = "VAR1";
                 let var1_val1 = "VAL1-1";
                 let var1_val2 = "VAL1-2";
