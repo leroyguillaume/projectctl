@@ -71,9 +71,6 @@ jobs:
           command: build
           args: --target ${{ matrix.target.name }} --release
 
-      - name: Run cargo install
-        run: cargo install --path .
-
   pip:
     needs: [cargo]
     runs-on: ubuntu-latest
