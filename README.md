@@ -21,27 +21,44 @@ curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-macos-x64
 
 sudo chmod +x /usr/local/bin/projectctl
+
+# Allow projectctl to source environment variables automatically when you're entering into a directory present in ~/.projectctl/allowed-dirs
+# If you're using bash
+echo 'eval "$(projectctl hook bash)"' >> ~/.bashrc
+source ~/.bashrc
+# If you're using zsh
+echo 'eval "$(projectctl hook zsh)"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 - Install from cargo
 ```bash
 cargo install projectctl
+
+# Allow projectctl to source environment variables automatically when you're entering into a directory present in ~/.projectctl/allowed-dirs
+# If you're using bash
+echo 'eval "$(projectctl hook bash)"' >> ~/.bashrc
+source ~/.bashrc
+# If you're using zsh
+echo 'eval "$(projectctl hook zsh)"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 - Install from source
-```
+```bash
 git clone https://github.com/leroyguillaume/projectctl
 cargo install --path projectctl
+
+# Allow projectctl to source environment variables automatically when you're entering into a directory present in ~/.projectctl/allowed-dirs
+# If you're using bash
+echo 'eval "$(projectctl hook bash)"' >> ~/.bashrc
+source ~/.bashrc
+# If you're using zsh
+echo 'eval "$(projectctl hook zsh)"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
-Then, add the following line to `~/.bashrc` or `~/.zshrc`:
-```bash
-eval "$(projectctl hook)"
-```
-
-Now, when you run `cd` command, if the directory you enter in is present in `~/.projectctl/allowed-dirs`, the output of the command `projectctl env` will be sourced. Note that you can override default location with option `--allowed-dirs`.
-
-### Create new project
+### Project
 
 To create a new project from a template, you can use `new` subcommand.
 
