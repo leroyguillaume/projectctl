@@ -182,6 +182,23 @@ mod test {
             }
 
             #[test]
+            fn ok_when_cfg_is_empty() {
+                test(
+                    |_| Parameters {
+                        cfg1_content: "---".into(),
+                        cfg2_content: "---".into(),
+                    },
+                    |_, res| {
+                        let expected_cfg = Config {
+                            env: HashMap::new(),
+                        };
+                        let cfg = res.unwrap();
+                        assert_eq!(cfg, expected_cfg);
+                    },
+                );
+            }
+
+            #[test]
             fn ok() {
                 let var1_key = "VAR1";
                 let var1_val1 = "VAL1-1";
