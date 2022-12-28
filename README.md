@@ -39,17 +39,7 @@ Then, add the following line to `~/.bashrc` or `~/.zshrc`:
 eval "$(projectctl hook)"
 ```
 
-## Documentation
-
-You can run the following command to see all available subcommands:
-```bash
-projectctl help
-```
-
-To display help about a subcommand, you can run:
-```bash
-projectctl <subcommand> help
-```
+Now, when you run `cd` command, if the directory you enter in is present in `~/.projectctl/allowed-dirs`, the output of the command `projectctl env` will be sourced. Note that you can override default location with option `--allowed-dirs`.
 
 ### Create new project
 
@@ -72,7 +62,21 @@ Example:
 projectctl new rs-lib my-project-name
 ```
 
+projectctl automatically updated `~/.projectctl/allowed-dirs`.
+
 When you want to delete a project, you can run the following command to make sure everything is clean-up:
 ```bash
 projectctl destroy my-project-name
 ```
+
+### Configuration files
+
+When you run `projectctl env`, these configuration files are loaded (from least to most priority):
+- `projectctl.yml`
+- `projectctl.local.yml`
+
+Note that you can override these locations with option `-c` (or `--config`).
+
+All configuration files must match [this JSON schema](resources/main/config.schema.json).
+
+You can find [here](examples/) some configuration examples.
