@@ -151,20 +151,39 @@ jobs:
             target
           key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Run cargo install
-        run: cargo install --path .
-
       - name: Run scenario
-        env:
-          PROJECT_DIR: ~/test
+        shell: bash -ex {0}
         run: |
+          function assert_var {
+            if [[ $2 != $3 ]]; then
+              2>&1 echo "$1: expected \`$3\`, got \`$2\`"
+              exit 1
+            fi
+          }
+
+          PATH=$(pwd)/target/${{ matrix.target.name }}/debug:$PATH
+          PROJECT_DIR=~/test
+
           git config --global user.name "$(git log -n 1 --pretty=format:%an)"
           git config --global user.email "$(git log -n 1 --pretty=format:%ae)"
           projectctl -vvv new rs-lib test $PROJECT_DIR
           cp examples/projectctl.yml $PROJECT_DIR/projectctl.local.yml
           cd $PROJECT_DIR
           eval $(projectctl -vvv env)
-          [[ $DEBUG == "true" ]] \
-            && [[ $HOST == "localhost" ]] \
-            && [[ $PORT == "9090" ]] \
-            && grep "^$(pwd)\$" ~/.projectctl/allowed-dirs
+          assert_var DEBUG $DEBUG true
+          assert_var HOST $HOST localhost
+          assert_var PORT $PORT 9090
+          if ! grep "^$(pwd)\$" ~/.projectctl/allowed-dirs > /dev/null; then
+            2>&1 echo "`$(pwd)` should be added in ~/.projectctl/allowed-dirs"
+            exit 1
+          fi
+          cd ..
+          projectctl -vvv destroy $PROJECT_DIR
+          if [[ -d $PROJECT_DIR ]]; then
+            2>&1 echo "$PROJECT_DIR should be deleted"
+            exit 1
+          fi
+          if grep "^$(pwd)\$" ~/.projectctl/allowed-dirs > /dev/null; then
+            2>&1 echo "`$(pwd)` should be removed from ~/.projectctl/allowed-dirs"
+            exit 1
+          fi
