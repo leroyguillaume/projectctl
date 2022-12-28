@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Formatter},
     fs::OpenOptions,
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -61,7 +61,10 @@ impl NewCommand {
             .unwrap_or_else(|| self.fs.cwd().map(|cwd| cwd.join(&self.args.name)))?;
         debug!("Using {} as destination directory", dest.display());
         if dest.exists() {
-            return Err(Error::DestinationDirectoryAlreadyExists(dest));
+            return Err(Error::IO(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("Directory {} already exists", dest.display()),
+            )));
         }
         self.fs.create_dir(&dest)?;
         let tpl_repo_path = match self.fs.create_temp_dir() {
@@ -347,7 +350,7 @@ mod test {
                         git_ref: None,
                     },
                     |_, res| match res.unwrap_err() {
-                        Error::DestinationDirectoryAlreadyExists(path) => assert_eq!(path, dest),
+                        Error::IO(_) => (),
                         err => panic!(
                             "expected DestinationDirectoryAlreadyExists (actual: {:?})",
                             err
