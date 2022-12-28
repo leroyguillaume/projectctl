@@ -5,15 +5,19 @@ use log::LevelFilter;
 use regex::Regex;
 
 use crate::{
-    cmd::{env::EnvCommand, hook::HookCommand, new::NewCommand, CommandKind},
+    cmd::{
+        destroy::DestroyCommand, env::EnvCommand, hook::HookCommand, new::NewCommand, CommandKind,
+    },
     err::{Error, Result},
 };
 
 pub const ENV_COMMAND: &str = "env";
 
-pub const ALLOWED_DIRS_OPT_HELP: &str = "Path to file that contains allowed directories list";
-pub const ALLOWED_DIRS_OPT_LONG: &str = "allowed-dirs";
-pub const ALLOWED_DIRS_OPT_NAME: &str = "ALLOWED DIRS FILE";
+const ALLOWED_DIRS_OPT_HELP: &str = "Path to file that contains allowed directories list";
+const ALLOWED_DIRS_OPT_LONG: &str = "allowed-dirs";
+const ALLOWED_DIRS_OPT_NAME: &str = "ALLOWED DIRS FILE";
+const PROJECT_DIR_OPT_HELP: &str = "Path to project directory";
+const PROJECT_DIR_OPT_NAME: &str = "PROJECT DIR";
 
 pub const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
@@ -32,6 +36,9 @@ pub struct Arguments {
 impl Arguments {
     pub fn into_command_kind(self) -> CommandKind {
         match self.cmd {
+            CommandArgument::Destroy(args) => {
+                CommandKind::Destroy(Box::new(DestroyCommand::new(args)))
+            }
             CommandArgument::Env(args) => CommandKind::Env(Box::new(EnvCommand::new(args))),
             CommandArgument::Hook(args) => CommandKind::Hook(Box::new(HookCommand::new(args))),
             CommandArgument::New(args) => CommandKind::New(Box::new(NewCommand::new(args))),
@@ -83,14 +90,43 @@ impl LoggingArguments {
 
 #[derive(Debug, Subcommand)]
 pub enum CommandArgument {
+    #[command(about = "Delete a project")]
+    Destroy(DestroyCommandArguments),
+
     #[command(about = "Print environment", name = ENV_COMMAND)]
     Env(EnvCommandArguments),
 
     #[command(about = "Print shell hook")]
     Hook(HookCommandArguments),
 
-    #[command(about = "Create new project from template")]
+    #[command(about = "Create a new project from template")]
     New(NewCommandArguments),
+}
+
+#[derive(Args, Clone, Debug, Eq, PartialEq)]
+pub struct DestroyCommandArguments {
+    #[clap(
+        help = ALLOWED_DIRS_OPT_HELP,
+        long = ALLOWED_DIRS_OPT_LONG,
+        name = ALLOWED_DIRS_OPT_NAME
+    )]
+    pub allowed_dirs_filepath: Option<PathBuf>,
+
+    #[clap(
+        help = PROJECT_DIR_OPT_HELP,
+        name = PROJECT_DIR_OPT_NAME,
+    )]
+    pub project_dirpath: PathBuf,
+}
+
+#[cfg(test)]
+impl DestroyCommandArguments {
+    pub fn new(project_dirpath: PathBuf) -> Self {
+        Self {
+            allowed_dirs_filepath: None,
+            project_dirpath,
+        }
+    }
 }
 
 #[derive(Args, Clone, Debug, Default, Eq, PartialEq)]
@@ -98,16 +134,16 @@ pub struct EnvCommandArguments {
     #[clap(
         help = "Configuration files (from least to most priority)",
         long = "config",
-        name = "FILE",
-        short = 'f'
+        name = "CONFIG FILE",
+        short = 'c'
     )]
     pub cfg_filepaths: Vec<PathBuf>,
 
     #[clap(
-        help = "Project directory",
-        long = "directory",
-        name = "DIRECTORY",
-        short = 'd'
+        help = PROJECT_DIR_OPT_HELP,
+        long = "project",
+        name = PROJECT_DIR_OPT_NAME,
+        short = 'p'
     )]
     pub project_dirpath: Option<PathBuf>,
 }
@@ -237,6 +273,21 @@ mod test {
 
             struct Parameters {
                 cmd: CommandArgument,
+            }
+
+            #[test]
+            fn destroy() {
+                test(
+                    || Parameters {
+                        cmd: CommandArgument::Destroy(DestroyCommandArguments::new(PathBuf::from(
+                            "my-project",
+                        ))),
+                    },
+                    |kind| match kind {
+                        CommandKind::Destroy(_) => (),
+                        kind => panic!("expected Destroy (actual: {:?})", kind),
+                    },
+                )
             }
 
             #[test]

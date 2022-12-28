@@ -167,4 +167,4 @@ jobs:
           [[ $DEBUG == "true" ]] \
             && [[ $HOST == "localhost" ]] \
             && [[ $PORT == "9090" ]] \
-            && grep "^$PROJECT_DIR\$" ~/.projectctl/allowed-dirs
+            && grep "^$(pwd)\$" ~/.projectctl/allowed-dirs

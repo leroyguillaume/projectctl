@@ -16,6 +16,16 @@ use crate::err::{Error, Result};
 
 #[cfg_attr(test, stub)]
 pub trait FileSystem {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        trace!("Canonicalizing {}", path.display());
+        path.canonicalize().map_err(|err| {
+            Error::IO(io::Error::new(
+                err.kind(),
+                format!("Unable to canonicalize {}: {}", path.display(), err),
+            ))
+        })
+    }
+
     fn copy(&self, src: &Path, dest: &Path, lock: bool) -> Result<()>;
 
     fn create_dir(&self, path: &Path) -> Result<()>;
@@ -26,7 +36,9 @@ pub trait FileSystem {
 
     fn delete_dir(&self, path: &Path) -> Result<()>;
 
-    fn ensure_lines(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()>;
+    fn ensure_lines_are_absent(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()>;
+
+    fn ensure_lines_are_present(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()>;
 
     fn home_dirpath(&self) -> Result<PathBuf>;
 
@@ -111,7 +123,45 @@ impl FileSystem for DefaultFileSystem {
         })
     }
 
-    fn ensure_lines(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()> {
+    fn ensure_lines_are_absent(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()> {
+        if path.exists() {
+            let content = self.read_to_string(path)?;
+            let mut file = self.open(
+                path,
+                OpenOptions::new().truncate(true).write(true).to_owned(),
+                lock,
+            )?;
+            for line in content.lines() {
+                if !lines.contains(&line) {
+                    writeln!(&mut file, "{}", line).map_err(|err| {
+                        Error::IO(io::Error::new(
+                            err.kind(),
+                            format!(
+                                "Unable to write line `{}` in file {}: {}",
+                                line,
+                                path.display(),
+                                err
+                            ),
+                        ))
+                    })?;
+                }
+            }
+        } else {
+            if let Some(parent) = path.parent() {
+                self.create_dir(parent)?;
+            }
+            debug!("Creating file {}", path.display());
+            File::create(path).map_err(|err| {
+                Error::IO(io::Error::new(
+                    err.kind(),
+                    format!("Unable to create file {}: {}", path.display(), err),
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn ensure_lines_are_present(&self, lines: &[&str], path: &Path, lock: bool) -> Result<()> {
         let content = if path.exists() {
             self.read_to_string(path)?
         } else {
@@ -130,7 +180,11 @@ impl FileSystem for DefaultFileSystem {
             }
             let mut file = self.open(
                 path,
-                OpenOptions::new().create(true).write(true).to_owned(),
+                OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .to_owned(),
                 lock,
             )?;
             for line in content_lines {
@@ -208,6 +262,18 @@ mod test {
 
     mod default_file_system {
         use super::*;
+
+        mod canonicalize {
+            use super::*;
+
+            #[test]
+            fn ok() {
+                let path = Path::new("README.md");
+                let expected_path = path.canonicalize().unwrap();
+                let path = DefaultFileSystem.canonicalize(path).unwrap();
+                assert_eq!(path, expected_path);
+            }
+        }
 
         mod copy {
             use super::*;
@@ -328,7 +394,103 @@ mod test {
             }
         }
 
-        mod ensure_lines {
+        mod ensure_lines_are_absent {
+            use super::*;
+
+            struct Context {
+                line1: &'static str,
+                line2: &'static str,
+                path: PathBuf,
+            }
+
+            struct Parameters {
+                initial_content: Option<String>,
+                lock: bool,
+            }
+
+            #[test]
+            fn ok_when_file_does_not_exist() {
+                test(
+                    |_| Parameters {
+                        initial_content: None,
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, "".into());
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_exists() {
+                let initial_content = "line3";
+                test(
+                    |_| Parameters {
+                        initial_content: Some(initial_content.into()),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, format!("{}\n", initial_content));
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_contains_one_of_lines() {
+                test(
+                    |ctx| Parameters {
+                        initial_content: Some(format!("\n{}\n\n", ctx.line1)),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, "\n\n".into());
+                    },
+                )
+            }
+
+            #[test]
+            fn ok_when_file_contains_all_lines() {
+                test(
+                    |ctx| Parameters {
+                        initial_content: Some(format!("\n{}\n\n{}\n\n", ctx.line1, ctx.line2)),
+                        lock: false,
+                    },
+                    |ctx, res| {
+                        assert_file_content(ctx, res, "\n\n\n".into());
+                    },
+                )
+            }
+
+            fn assert_file_content(ctx: &Context, res: Result<()>, expected_content: String) {
+                res.unwrap();
+                let content = read_to_string(&ctx.path).unwrap();
+                assert_eq!(content, expected_content);
+            }
+
+            fn test<P: Fn(&Context) -> Parameters, A: Fn(&Context, Result<()>)>(
+                create_params_fn: P,
+                assert_fn: A,
+            ) {
+                let ctx = Context {
+                    line1: "line1",
+                    line2: "line2",
+                    path: tempdir().unwrap().into_path().join("parent").join("test"),
+                };
+                let params = create_params_fn(&ctx);
+                if let Some(content) = params.initial_content {
+                    create_dir_all(ctx.path.parent().unwrap()).unwrap();
+                    write(&ctx.path, content).unwrap();
+                }
+                let res = DefaultFileSystem.ensure_lines_are_absent(
+                    &[ctx.line1, ctx.line2],
+                    &ctx.path,
+                    params.lock,
+                );
+                assert_fn(&ctx, res);
+            }
+        }
+
+        mod ensure_lines_are_present {
             use super::*;
 
             struct Context {
@@ -393,7 +555,7 @@ mod test {
             }
 
             #[test]
-            fn ok_when_file_contains_already_alll_lines() {
+            fn ok_when_file_contains_already_all_lines() {
                 let initial_content_fn =
                     |ctx: &Context| -> String { format!("\n{}\n\n{}\n\n", ctx.line1, ctx.line2) };
                 test(
@@ -427,8 +589,11 @@ mod test {
                     create_dir_all(ctx.path.parent().unwrap()).unwrap();
                     write(&ctx.path, content).unwrap();
                 }
-                let res =
-                    DefaultFileSystem.ensure_lines(&[ctx.line1, ctx.line2], &ctx.path, params.lock);
+                let res = DefaultFileSystem.ensure_lines_are_present(
+                    &[ctx.line1, ctx.line2],
+                    &ctx.path,
+                    params.lock,
+                );
                 assert_fn(&ctx, res);
             }
         }
