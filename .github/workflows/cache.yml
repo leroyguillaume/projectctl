@@ -76,7 +76,7 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v3
         with:
-          name: projectctl-${{ matrix.target.name }}-${{ github.head_ref }}
+          name: projectctl-${{ matrix.target.name }}-${{ github.sha }}
           path: target/${{ matrix.target.name }}/release/projectctl
           if-no-files-found: error
           retention-days: 1
