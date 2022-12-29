@@ -12,11 +12,10 @@ fn main() {
     match version() {
         Ok(version) => set_version(version),
         Err(err) => {
-            let version = dev_version();
-            println!("cargo:warning=Unable to compute version");
+            println!("cargo:warning=Unable to compute version from git");
             println!("cargo:warning=git: {}", err);
-            println!("cargo:warning=Setting VERSION to `{}`", version);
-            set_version(version);
+            println!("cargo:warning=Setting VERSION to `{}`", PKG_VERSION);
+            set_version(PKG_VERSION.into());
         }
     }
 }
@@ -25,16 +24,12 @@ fn set_version(version: String) {
     println!("cargo:rustc-env=VERSION={}", version)
 }
 
-fn dev_version() -> String {
-    format!("{}+dev", PKG_VERSION)
-}
-
 fn version() -> Result<String, Error> {
     let manifest_dirpath = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo = Repository::open(manifest_dirpath)?;
     let diff = repo.diff_index_to_workdir(None, None)?;
     if diff.deltas().count() > 0 {
-        Ok(dev_version())
+        Ok(format!("{}+dev", PKG_VERSION))
     } else {
         let tag_regex = Regex::new(TAG_PATTERN).unwrap();
         let head_commit_id = repo.head()?.peel_to_commit()?.id();
