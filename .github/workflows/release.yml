@@ -38,9 +38,9 @@ jobs:
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
-          mv /tmp/projectctl-x86_64-unknown-linux-gnu-$GITHUB_HEAD_REF/projectctl /tmp/projectctl-$VERSION-linux-x64
-          mv /tmp/projectctl-aarch64-unknown-linux-gnu-$GITHUB_HEAD_REF/projectctl /tmp/projectctl-$VERSION-linux-aarch64
-          mv /tmp/projectctl-x86_64-apple-darwin-$GITHUB_HEAD_REF/projectctl /tmp/projectctl-$VERSION-macos-x64
+          mv /tmp/projectctl-x86_64-unknown-linux-gnu-$GITHUB_SHA/projectctl /tmp/projectctl-$VERSION-linux-x64
+          mv /tmp/projectctl-aarch64-unknown-linux-gnu-$GITHUB_SHA/projectctl /tmp/projectctl-$VERSION-linux-aarch64
+          mv /tmp/projectctl-x86_64-apple-darwin-$GITHUB_SHA/projectctl /tmp/projectctl-$VERSION-macos-x64
 
       - name: Check projectctl --version matches tag
         env:
