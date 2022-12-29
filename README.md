@@ -11,7 +11,7 @@ CLI tool to manage project.
 *Sorry for Mac M1/M2 users, I don't have it so I can't build on this architecture because it's not available on GitHub Actions.*
 
 ```bash
-VERSION=0.2.0
+VERSION=0.2.1
 
 # Linux x64
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-x64
