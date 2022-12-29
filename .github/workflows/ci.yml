@@ -151,12 +151,19 @@ jobs:
             target
           key: ${{ matrix.target.name }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Run cross build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target.name }}
+
       - name: Run scenario
         shell: bash -ex {0}
         run: |
           function assert_var {
-            if [[ $2 != $3 ]]; then
-              2>&1 echo "$1: expected \`$3\`, got \`$2\`"
+            if [[ "${!1}" != $2 ]]; then
+              2>&1 echo "$1: expected \`$2\`, got \`${!1}\`"
               exit 1
             fi
           }
@@ -170,9 +177,10 @@ jobs:
           cp examples/projectctl.yml $PROJECT_DIR/projectctl.local.yml
           cd $PROJECT_DIR
           eval $(projectctl -vvv env)
-          assert_var DEBUG $DEBUG true
-          assert_var HOST $HOST localhost
-          assert_var PORT $PORT 9090
+          assert_var DEBUG true
+          assert_var HOST localhost
+          assert_var PORT 9090
+          assert_var GIT_USER "$(git config user.name)"
           if ! grep "^$(pwd)\$" ~/.projectctl/allowed-dirs > /dev/null; then
             2>&1 echo "`$(pwd)` should be added in ~/.projectctl/allowed-dirs"
             exit 1

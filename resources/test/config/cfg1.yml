@@ -1,0 +1,9 @@
+---
+env:
+  VAR_BOOL: true
+  VAR_INT: 1
+  VAR_FLOAT: 1.1
+  VAR_STR: str
+  VAR_RUN:
+    run: |
+      echo test

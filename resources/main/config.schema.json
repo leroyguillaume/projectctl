@@ -12,11 +12,29 @@
                     "additionalProperties": false,
                     "patternProperties": {
                         "^[A-z_][A-z_0-9]+$": {
-                            "type": [
-                                "boolean",
-                                "integer",
-                                "number",
-                                "string"
+                            "anyOf": [
+                                {
+                                    "type": [
+                                        "boolean",
+                                        "integer",
+                                        "number",
+                                        "string"
+                                    ]
+                                },
+                                {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "run": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "oneOf": [
+                                        {
+                                            "required": ["run"]
+                                        }
+                                    ]
+                                }
                             ]
                         }
                     }

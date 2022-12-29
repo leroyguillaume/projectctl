@@ -1,4 +1,4 @@
 # Define in this file local project configuration
+# You can find configuration examples here: https://github.com/leroyguillaume/projectctl/tree/main/examples
 ---
 env:
-  # MY_VAR: MY_VALUE

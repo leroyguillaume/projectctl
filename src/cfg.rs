@@ -8,8 +8,6 @@ use std::{
 use jsonschema::{JSONSchema, ValidationError};
 use log::{debug, info, trace, warn};
 use serde_json::Value;
-#[cfg(test)]
-use stub_trait::stub;
 
 use crate::{
     err::{Error, Result},
@@ -19,6 +17,7 @@ use crate::{
 pub const JSON_SCHEMA: &str = include_str!("../resources/main/config.schema.json");
 
 const ENV_KEY: &str = "env";
+const ENV_RUN_KEY: &str = "run";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Config {
@@ -28,9 +27,10 @@ pub struct Config {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvVarKind {
     Literal(String),
+    Run(String),
 }
 
-#[cfg_attr(test, stub)]
+#[cfg_attr(test, stub_trait::stub)]
 pub trait ConfigLoader {
     fn load(&self, filepaths: &[PathBuf]) -> Result<Config>;
 }
@@ -51,21 +51,38 @@ impl DefaultConfigLoader {
         trace!("Loading environment configuration");
         if let Value::Object(env_val) = env_val {
             for (key, val) in env_val.into_iter() {
-                let val = match val {
-                    Value::Bool(val) => val.to_string(),
-                    Value::Number(val) => val.to_string(),
-                    Value::String(val) => val,
-                    _ => {
-                        warn!("Invalid value for `{}.{}`", ENV_KEY, key);
-                        continue;
-                    }
+                let kind = if let Some(kind) = Self::load_var_kind(&key, val) {
+                    kind
+                } else {
+                    continue;
                 };
-                let previous = cfg.env.insert(key.clone(), EnvVarKind::Literal(val));
+                let previous = cfg.env.insert(key.clone(), kind);
                 if previous.is_some() {
                     debug!("Configuration of environment variable `{}` overriden", key);
                 } else {
                     debug!("Configuration of environment variable `{}` loaded", key);
                 }
+            }
+        }
+    }
+
+    #[inline]
+    fn load_var_kind(key: &str, val: Value) -> Option<EnvVarKind> {
+        match val {
+            Value::Bool(val) => Some(EnvVarKind::Literal(val.to_string())),
+            Value::Number(val) => Some(EnvVarKind::Literal(val.to_string())),
+            Value::Object(val) => {
+                if let Some(val) = val.get(ENV_RUN_KEY).and_then(|val| val.as_str()) {
+                    Some(EnvVarKind::Run(val.trim().into()))
+                } else {
+                    warn!("Invalid value for `{}.{}`", ENV_KEY, key);
+                    None
+                }
+            }
+            Value::String(val) => Some(EnvVarKind::Literal(val)),
+            _ => {
+                warn!("Invalid value for `{}.{}`", ENV_KEY, key);
+                None
             }
         }
     }
@@ -149,16 +166,16 @@ mod test {
             }
 
             struct Parameters {
-                cfg1_content: String,
-                cfg2_content: String,
+                cfg1_content: &'static str,
+                cfg2_content: &'static str,
             }
 
             #[test]
             fn err_when_yml_is_malformed() {
                 test(
                     |_| Parameters {
-                        cfg1_content: "{".into(),
-                        cfg2_content: "".into(),
+                        cfg1_content: "{",
+                        cfg2_content: "",
                     },
                     |ctx, res| match res.unwrap_err() {
                         Error::MalformedYaml { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
@@ -171,8 +188,8 @@ mod test {
             fn err_when_cfg_is_invalid() {
                 test(
                     |_| Parameters {
-                        cfg1_content: "key: value".into(),
-                        cfg2_content: "".into(),
+                        cfg1_content: "key: value",
+                        cfg2_content: "",
                     },
                     |ctx, res| match res.unwrap_err() {
                         Error::InvalidConfig { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
@@ -185,8 +202,8 @@ mod test {
             fn ok_when_files_are_empty() {
                 test(
                     |_| Parameters {
-                        cfg1_content: "---".into(),
-                        cfg2_content: "---".into(),
+                        cfg1_content: "---",
+                        cfg2_content: "---",
                     },
                     |_, res| {
                         let expected_cfg = Config {
@@ -202,8 +219,8 @@ mod test {
             fn ok_when_env_is_empty() {
                 test(
                     |_| Parameters {
-                        cfg1_content: format!("{}:\n", ENV_KEY),
-                        cfg2_content: "---".into(),
+                        cfg1_content: "env:",
+                        cfg2_content: "---",
                     },
                     |_, res| {
                         let expected_cfg = Config {
@@ -216,31 +233,20 @@ mod test {
             }
 
             #[test]
-            fn ok() {
-                let var1_key = "VAR1";
-                let var1_val1 = "VAL1-1";
-                let var1_val2 = "VAL1-2";
-                let var2_key = "VAR2";
-                let var2_val = "VAL2";
-                let var3_key = "VAR3";
-                let var3_val = "VAL3";
+            fn ok_when_files_are_not_empty() {
                 test(
                     |_| Parameters {
-                        cfg1_content: format!(
-                            "{}:\n  {}: {}\n  {}: {}",
-                            ENV_KEY, var1_key, var1_val1, var2_key, var2_val
-                        ),
-                        cfg2_content: format!(
-                            "{}:\n  {}: {}\n  {}: {}",
-                            ENV_KEY, var1_key, var1_val2, var3_key, var3_val
-                        ),
+                        cfg1_content: include_str!("../resources/test/config/cfg1.yml"),
+                        cfg2_content: include_str!("../resources/test/config/cfg2.yml"),
                     },
                     |_, res| {
                         let expected_cfg = Config {
                             env: HashMap::from_iter([
-                                (var1_key.into(), EnvVarKind::Literal(var1_val2.into())),
-                                (var2_key.into(), EnvVarKind::Literal(var2_val.into())),
-                                (var3_key.into(), EnvVarKind::Literal(var3_val.into())),
+                                ("VAR_BOOL".into(), EnvVarKind::Literal("false".into())),
+                                ("VAR_INT".into(), EnvVarKind::Literal("1".into())),
+                                ("VAR_FLOAT".into(), EnvVarKind::Literal("1.1".into())),
+                                ("VAR_STR".into(), EnvVarKind::Literal("str".into())),
+                                ("VAR_RUN".into(), EnvVarKind::Run("echo test".into())),
                             ]),
                         };
                         let cfg = res.unwrap();
