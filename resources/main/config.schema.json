@@ -8,7 +8,7 @@
             "additionalProperties": false,
             "properties": {
                 "env": {
-                    "type": "object",
+                    "type": ["null", "object"],
                     "additionalProperties": false,
                     "patternProperties": {
                         "^[A-z_][A-z_0-9]+$": {
