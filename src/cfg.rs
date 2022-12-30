@@ -98,7 +98,7 @@ impl DefaultConfigLoader {
         let file = fs.open(filepath, OpenOptions::new().read(true).to_owned(), false)?;
         debug!("Loading file {}", filepath.display());
         let cfg_val: Value =
-            serde_yaml::from_reader(file).map_err(|cause| Error::MalformedYaml {
+            serde_yaml::from_reader(file).map_err(|cause| Error::MalformedConfig {
                 cause,
                 path: filepath.to_path_buf(),
             })?;
@@ -178,7 +178,7 @@ mod test {
                         cfg2_content: "",
                     },
                     |ctx, res| match res.unwrap_err() {
-                        Error::MalformedYaml { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
+                        Error::MalformedConfig { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
                         err => panic!("expected MalformedYaml (actual: {:?})", err),
                     },
                 );

@@ -173,7 +173,11 @@ jobs:
 
           git config --global user.name "$(git log -n 1 --pretty=format:%an)"
           git config --global user.email "$(git log -n 1 --pretty=format:%ae)"
-          projectctl -vvv new rs-lib test $PROJECT_DIR
+          projectctl -vvv new \
+            -d "Awesome project" \
+            --values '{"repository-url":"https://github.com/username/project-name"}'\
+            --git-branch projectctl-v1.0.0 \
+            rs-lib test $PROJECT_DIR
           cp examples/projectctl.yml $PROJECT_DIR/projectctl.local.yml
           cd $PROJECT_DIR
           eval $(projectctl -vvv env)

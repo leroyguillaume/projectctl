@@ -6,8 +6,6 @@ use std::{
 
 use jsonschema::ValidationError;
 
-use crate::cli::KEY_VALUE_PATTERN;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -19,15 +17,16 @@ pub enum Error {
         causes: Vec<ValidationError<'static>>,
         path: PathBuf,
     },
-    InvalidVariable(String),
     Liquid {
         cause: liquid::Error,
         src: LiquidErrorSource,
     },
-    MalformedYaml {
+    MalformedConfig {
         cause: serde_yaml::Error,
         path: PathBuf,
     },
+    MalformedValues(serde_json::Error),
+    NotAJsonObject,
     TemplateNotFound(String),
     UnsupportedShell(String),
 }
@@ -39,9 +38,10 @@ impl Error {
             Self::HomeNotFound => exitcode::UNAVAILABLE,
             Self::IO(_) => exitcode::IOERR,
             Self::InvalidConfig { .. } => exitcode::CONFIG,
-            Self::InvalidVariable(_) => exitcode::USAGE,
             Self::Liquid { .. } => exitcode::DATAERR,
-            Self::MalformedYaml { .. } => exitcode::CONFIG,
+            Self::MalformedConfig { .. } => exitcode::CONFIG,
+            Self::MalformedValues(_) => exitcode::USAGE,
+            Self::NotAJsonObject => exitcode::USAGE,
             Self::TemplateNotFound(_) => exitcode::DATAERR,
             Self::UnsupportedShell(_) => exitcode::DATAERR,
         }
@@ -57,16 +57,16 @@ impl Display for Error {
             Self::InvalidConfig { path, .. } => {
                 write!(f, "{}: Invalid configuration", path.display())
             }
-            Self::InvalidVariable(key_val) => {
-                write!(f, "`{}` does not match `{}`", key_val, KEY_VALUE_PATTERN)
-            }
             Self::Liquid { src: source, .. } => match source {
                 LiquidErrorSource::File(path) => write!(f, "Unable to render {}", path.display()),
                 LiquidErrorSource::Filename(filename) => {
                     write!(f, "Unable to render `{}`", filename.display())
                 }
+                LiquidErrorSource::Values => write!(f, "Unable to declare values"),
             },
-            Self::MalformedYaml { cause, path } => write!(f, "{}: {}", path.display(), cause),
+            Self::MalformedConfig { cause, path } => write!(f, "{}: {}", path.display(), cause),
+            Self::MalformedValues(err) => write!(f, "{}", err),
+            Self::NotAJsonObject => write!(f, "Must be a JSON object"),
             Self::TemplateNotFound(tpl) => write!(f, "Template `{}` not found", tpl),
             Self::UnsupportedShell(shell) => write!(f, "Shell `{}` is not supported", shell),
         }
@@ -79,6 +79,7 @@ impl std::error::Error for Error {}
 pub enum LiquidErrorSource {
     File(PathBuf),
     Filename(PathBuf),
+    Values,
 }
 
 #[cfg(test)]
@@ -145,16 +146,6 @@ mod test {
             }
 
             #[test]
-            fn invalid_variable() {
-                test(
-                    || Parameters {
-                        err: Error::InvalidVariable("test".into()),
-                    },
-                    |rc| assert_eq!(rc, exitcode::USAGE),
-                );
-            }
-
-            #[test]
             fn liquid() {
                 test(
                     || Parameters {
@@ -168,15 +159,37 @@ mod test {
             }
 
             #[test]
-            fn malformed_yaml() {
+            fn malformed_config() {
                 test(
                     || Parameters {
-                        err: Error::MalformedYaml {
+                        err: Error::MalformedConfig {
                             cause: serde_yaml::from_str::<serde_yaml::Value>("{").unwrap_err(),
                             path: "/".into(),
                         },
                     },
                     |rc| assert_eq!(rc, exitcode::CONFIG),
+                );
+            }
+
+            #[test]
+            fn malformed_values() {
+                test(
+                    || Parameters {
+                        err: Error::MalformedValues(
+                            serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+                        ),
+                    },
+                    |rc| assert_eq!(rc, exitcode::USAGE),
+                );
+            }
+
+            #[test]
+            fn not_a_json_object() {
+                test(
+                    || Parameters {
+                        err: Error::NotAJsonObject,
+                    },
+                    |rc| assert_eq!(rc, exitcode::USAGE),
                 );
             }
 
@@ -272,18 +285,6 @@ mod test {
         }
 
         #[test]
-        fn invalid_variable() {
-            let key_val = "test";
-            let expected_str = format!("`{}` does not match `{}`", key_val, KEY_VALUE_PATTERN);
-            test(
-                || Parameters {
-                    err: Error::InvalidVariable(key_val.into()),
-                },
-                |str| assert_eq!(str, expected_str),
-            );
-        }
-
-        #[test]
         fn liquid_when_src_is_file() {
             let path = Path::new("/");
             let expected_str = format!("Unable to render {}", path.display());
@@ -314,12 +315,25 @@ mod test {
         }
 
         #[test]
-        fn malformed_yaml() {
+        fn liquid_when_src_is_values() {
+            test(
+                || Parameters {
+                    err: Error::Liquid {
+                        cause: liquid::Error::with_msg("error"),
+                        src: LiquidErrorSource::Values,
+                    },
+                },
+                |str| assert_eq!(str, "Unable to declare values"),
+            );
+        }
+
+        #[test]
+        fn malformed_config() {
             let yaml = "{";
             let path = Path::new("/");
             test(
                 || Parameters {
-                    err: Error::MalformedYaml {
+                    err: Error::MalformedConfig {
                         cause: serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap_err(),
                         path: path.to_path_buf(),
                     },
@@ -329,6 +343,32 @@ mod test {
                     let expected_str = format!("{}: {}", path.display(), cause);
                     assert_eq!(str, expected_str);
                 },
+            );
+        }
+
+        #[test]
+        fn malformed_values() {
+            let json = "{";
+            test(
+                || Parameters {
+                    err: Error::MalformedValues(
+                        serde_json::from_str::<serde_json::Value>(json).unwrap_err(),
+                    ),
+                },
+                |str| {
+                    let cause = serde_json::from_str::<serde_json::Value>(json).unwrap_err();
+                    assert_eq!(str, cause.to_string());
+                },
+            )
+        }
+
+        #[test]
+        fn not_a_json_object() {
+            test(
+                || Parameters {
+                    err: Error::NotAJsonObject,
+                },
+                |str| assert_eq!(str, "Must be a JSON object"),
             );
         }
 
