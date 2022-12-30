@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{env::var, path::Path};
 
 use git2::{Error, Repository};
 use regex::Regex;
@@ -9,15 +9,25 @@ const TAG_PATTERN: &str = "^v([0-9]+\\.[0-9]+\\.[0-9]+)";
 
 fn main() {
     println!("cargo:rerun-if-changed=.git/**");
-    match version() {
-        Ok(version) => set_version(version),
-        Err(err) => {
-            println!("cargo:warning=Unable to compute version from git");
-            println!("cargo:warning=git: {}", err);
-            println!("cargo:warning=Setting VERSION to `{}`", PKG_VERSION);
-            set_version(PKG_VERSION.into());
+    let profile = var("PROFILE").unwrap();
+    if profile == "release" {
+        set_version(PKG_VERSION.into())
+    } else {
+        match version() {
+            Ok(version) => set_version(version),
+            Err(err) => {
+                let version = dev_version();
+                println!("cargo:warning=Unable to compute version from git");
+                println!("cargo:warning=git: {}", err);
+                println!("cargo:warning=Setting VERSION to `{}`", version);
+                set_version(version);
+            }
         }
     }
+}
+
+fn dev_version() -> String {
+    format!("{}+dev", PKG_VERSION)
 }
 
 fn set_version(version: String) {
