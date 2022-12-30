@@ -7,6 +7,7 @@ mod git;
 mod log;
 mod paths;
 mod renderer;
+mod script;
 
 use std::{io::stdout, process::exit};
 
