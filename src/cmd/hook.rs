@@ -1,5 +1,4 @@
 use std::{
-    env::{var, VarError},
     fmt::{self, Debug, Formatter},
     io::Write,
 };
@@ -14,6 +13,7 @@ use crate::{
     cli::{HookCommandArguments, HookCommandShellArgument, ENV_COMMAND},
     err::{Error, Result},
     paths::{DefaultPaths, Paths},
+    sys::{DefaultSystem, System},
 };
 
 const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
@@ -27,20 +27,18 @@ const ALLOWED_DIRS_FILEPATH_VAR_KEY: &str = "allowed_dirs_filepath";
 const ENV_COMMAND_VAR_KEY: &str = "env_cmd";
 const PROGRAM_VAR_KEY: &str = "program";
 
-type EnvFn = dyn Fn(&str) -> std::result::Result<String, VarError>;
-
 pub struct HookCommand {
     args: HookCommandArguments,
-    env_fn: Box<EnvFn>,
     paths: Box<dyn Paths>,
+    sys: Box<dyn System>,
 }
 
 impl HookCommand {
     pub fn new(args: HookCommandArguments) -> Self {
         Self {
             args,
-            env_fn: Box::new(|key| var(key)),
             paths: Box::new(DefaultPaths::new()),
+            sys: Box::new(DefaultSystem),
         }
     }
 
@@ -57,7 +55,7 @@ impl HookCommand {
                     "Retrieving `{}` environment variable value",
                     SHELL_ENV_VAR_KEY
                 );
-                let shell = (self.env_fn)(SHELL_ENV_VAR_KEY).unwrap_or_default();
+                let shell = self.sys.env_var(SHELL_ENV_VAR_KEY).unwrap_or_default();
                 trace!("`{}`: {}", SHELL_ENV_VAR_KEY, shell);
                 if shell.ends_with("bash") {
                     Ok(BASH_HOOK_TEMPLATE)
@@ -105,7 +103,7 @@ mod test {
 
     use tempfile::tempdir;
 
-    use crate::paths::StubPaths;
+    use crate::{paths::StubPaths, sys::StubSystem};
 
     use super::*;
 
@@ -256,18 +254,14 @@ mod test {
                         Ok(filepath.clone())
                     }
                 });
-                let env_fn = move |key: &str| -> std::result::Result<String, VarError> {
+                let sys = StubSystem::new().with_stub_of_env_var(move |_, key| {
                     assert_eq!(key, SHELL_ENV_VAR_KEY);
-                    if let Some(shell) = params.shell_env_var_val {
-                        Ok(shell.into())
-                    } else {
-                        Err(VarError::NotPresent)
-                    }
-                };
+                    params.shell_env_var_val.map(|shell| shell.into())
+                });
                 let cmd = HookCommand {
                     args: params.args,
-                    env_fn: Box::new(env_fn),
                     paths: Box::new(paths),
+                    sys: Box::new(sys),
                 };
                 let mut out = vec![];
                 let res = cmd.run(&mut out).map(|_| String::from_utf8(out).unwrap());

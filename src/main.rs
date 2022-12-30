@@ -8,6 +8,7 @@ mod log;
 mod paths;
 mod renderer;
 mod script;
+mod sys;
 
 use std::{io::stdout, process::exit};
 
