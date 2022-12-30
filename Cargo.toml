@@ -29,6 +29,7 @@ serde_yaml = "0.9"
 tempfile = "3.3"
 
 [dev-dependencies]
+rand = "0.8"
 stub_trait = "1.0"
 
 [build-dependencies]

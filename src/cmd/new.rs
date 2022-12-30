@@ -214,6 +214,7 @@ impl DefaultVariablesLoader {
         }
     }
 
+    #[inline]
     fn load_git_var(var_key: &str, git: &dyn Git) -> Option<String> {
         match git.default_config_value(var_key) {
             Ok(val) => Some(val),
@@ -232,6 +233,7 @@ impl VariablesLoader for DefaultVariablesLoader {
         desc: Option<String>,
         overrides: Vec<(String, String)>,
     ) -> HashMap<String, String> {
+        debug!("Loading context variables");
         let mut vars = HashMap::new();
         vars.insert(NAME_VAR_NAME.into(), name);
         if let Some(desc) = desc {
