@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use log::LevelFilter;
-use regex::Regex;
+use serde_json::{Map, Value};
 
 use crate::{
     cmd::{
@@ -11,6 +11,8 @@ use crate::{
     err::{Error, Result},
 };
 
+pub type Values = Map<String, Value>;
+
 pub const ENV_COMMAND: &str = "env";
 
 const ALLOWED_DIRS_OPT_HELP: &str = "Path to file that contains allowed directories list";
@@ -18,8 +20,6 @@ const ALLOWED_DIRS_OPT_LONG: &str = "allowed-dirs";
 const ALLOWED_DIRS_OPT_NAME: &str = "ALLOWED DIRS FILE";
 const PROJECT_DIR_OPT_HELP: &str = "Path to project directory";
 const PROJECT_DIR_OPT_NAME: &str = "PROJECT DIR";
-
-pub const KEY_VALUE_PATTERN: &str = r"^(\s*[A-z_][A-z0-9_-]*\s*)=\s*(.+)\s*$";
 
 const DEFAULT_TPL_GIT_REPO_URL: &str = "https://github.com/leroyguillaume/projectctl-templates";
 
@@ -180,7 +180,7 @@ pub struct NewCommandArguments {
         help = "Description of the project to create",
         long = "description",
         name = "DESCRIPTION",
-        short = 'D'
+        short = 'd'
     )]
     pub desc: Option<String>,
 
@@ -228,14 +228,8 @@ pub struct NewCommandArguments {
     )]
     pub tpl_repo_url: String,
 
-    #[clap(
-        help = "Define custom variable",
-        long = "set",
-        name = "KEY=VALUE",
-        short = 'd',
-        value_parser = parse_key_value,
-    )]
-    pub vars: Vec<(String, String)>,
+    #[clap(help = "Define custom variables (JSON format)", long, value_parser = parse_values)]
+    pub values: Option<Values>,
 }
 
 #[cfg(test)]
@@ -252,24 +246,22 @@ impl NewCommandArguments {
             tpl_repo_url: DEFAULT_TPL_GIT_REPO_URL.into(),
             tpl_repo_branch: None,
             tpl_repo_tag: None,
-            vars: vec![],
+            values: None,
         }
     }
 }
 
-fn parse_key_value(key_val: &str) -> Result<(String, String)> {
-    let regex = Regex::new(KEY_VALUE_PATTERN).unwrap();
-    if let Some(captures) = regex.captures(key_val) {
-        let key = captures.get(1).unwrap().as_str();
-        let val = captures.get(2).unwrap().as_str();
-        Ok((key.trim().into(), val.trim().into()))
-    } else {
-        Err(Error::InvalidVariable(key_val.into()))
+fn parse_values(json: &str) -> Result<Values> {
+    match serde_json::from_str(json).map_err(Error::MalformedValues)? {
+        Value::Object(json) => Ok(json),
+        _ => Err(Error::NotAJsonObject),
     }
 }
 
 #[cfg(test)]
 mod test {
+    use serde_json::json;
+
     use super::*;
 
     mod arguments {
@@ -441,113 +433,45 @@ mod test {
         }
     }
 
-    mod parse_key_value {
+    mod parse_values {
         use super::*;
 
         struct Parameters {
-            key_val: String,
+            arg: String,
         }
 
         #[test]
-        fn err_when_equal_is_missing() {
-            let key_val = "key";
+        fn err_when_json_is_not_obj() {
             test(
                 || Parameters {
-                    key_val: key_val.into(),
+                    arg: "\"test\"".into(),
                 },
-                |res| assert_err(res, key_val),
-            );
+                |res| match res.unwrap_err() {
+                    Error::NotAJsonObject => (),
+                    err => panic!("expected NotAJsonObject (actual: {:?})", err),
+                },
+            )
         }
 
         #[test]
-        fn err_when_key_starts_with_digit() {
-            let key_val = "0var=value";
+        fn ok_when_json_is_obj() {
+            let key = "test";
+            let val = 3;
             test(
                 || Parameters {
-                    key_val: key_val.into(),
+                    arg: format!("{{\"{}\":{}}}", key, val),
                 },
-                |res| assert_err(res, key_val),
-            );
-        }
-
-        #[test]
-        fn err_when_key_starts_with_dash() {
-            let key_val = "-=value";
-            test(
-                || Parameters {
-                    key_val: key_val.into(),
+                |res| {
+                    let expected_values = json!({ key: val });
+                    let values = Value::Object(res.unwrap());
+                    assert_eq!(values, expected_values);
                 },
-                |res| assert_err(res, key_val),
-            );
+            )
         }
 
-        #[test]
-        fn ok_when_key_contains_dash_and_underscore() {
-            let expected_key = "v_-0";
-            let expected_val = "val";
-            test(
-                || Parameters {
-                    key_val: format!(" {} = {} ", expected_key, expected_val),
-                },
-                |res| assert_key_val(res, expected_key, expected_val),
-            );
-        }
-
-        #[test]
-        fn ok_when_key_is_single_underscore() {
-            let expected_key = "_";
-            let expected_val = "val";
-            test(
-                || Parameters {
-                    key_val: format!(" {} = {} ", expected_key, expected_val),
-                },
-                |res| assert_key_val(res, expected_key, expected_val),
-            );
-        }
-
-        #[test]
-        fn ok_when_key_is_single_letter() {
-            let expected_key = "a";
-            let expected_val = "val";
-            test(
-                || Parameters {
-                    key_val: format!(" {} = {} ", expected_key, expected_val),
-                },
-                |res| assert_key_val(res, expected_key, expected_val),
-            );
-        }
-
-        #[test]
-        fn ok_when_key_is_word() {
-            let expected_key = "var";
-            let expected_val = "val";
-            test(
-                || Parameters {
-                    key_val: format!(" {} = {} ", expected_key, expected_val),
-                },
-                |res| assert_key_val(res, expected_key, expected_val),
-            );
-        }
-
-        fn assert_err(res: Result<(String, String)>, expected_key_val: &str) {
-            match res.unwrap_err() {
-                Error::InvalidVariable(key_val) => assert_eq!(key_val, expected_key_val),
-                err => panic!("expected InvalidVariable (actual: {:?})", err),
-            }
-        }
-
-        fn assert_key_val(res: Result<(String, String)>, expected_key: &str, expected_val: &str) {
-            let (key, val) = res.unwrap();
-            assert_eq!(key, expected_key);
-            assert_eq!(val, expected_val);
-        }
-
-        fn test<P: Fn() -> Parameters, A: Fn(Result<(String, String)>)>(
-            create_params_fn: P,
-            assert_fn: A,
-        ) {
+        fn test<P: Fn() -> Parameters, A: Fn(Result<Values>)>(create_params_fn: P, assert_fn: A) {
             let params = create_params_fn();
-            let res = parse_key_value(&params.key_val);
+            let res = parse_values(&params.arg);
             assert_fn(res);
         }
     }

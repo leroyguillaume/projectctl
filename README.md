@@ -11,7 +11,7 @@ CLI tool to manage project.
 *Sorry for Mac M1/M2 users, I don't have it so I can't build on this architecture because it's not available on GitHub Actions.*
 
 ```bash
-VERSION=0.3.0
+VERSION=1.0.0
 
 # Linux x64
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-x64
@@ -68,15 +68,16 @@ By default, [leroyguillaume/projectctl-templates](https://github.com/leroyguilla
 
 projectctl injects some variables:
 - `name` that has for value the project name
-- `description` that has for value the project description (can be set with `-D` option, unset by default)
-- `git_user_name` that has for value the git username (can be undefined if it is not set in default git configuration)
-- `git_user_email` that has for value the email of the git user (can be undefined if it is not set in default git configuration)
+- `description` that has for value the project description (can be set with `-d` option, unset by default)
+- `git.user.name` that has for value the git username (can be undefined if it is not set in default git configuration)
+- `git.user.email` that has for value the email of the git user (can be undefined if it is not set in default git configuration)
 
-You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `-d key=value` option.
+You can also define any variable you want but keep in mind that you will have to set it when you run command by adding `--values` option.
 
-Example:
+Examples:
 ```bash
 projectctl new rs-lib my-project-name
+projectctl new --values '{"repository-url":"https://github.com/username/project-name"}' rs-lib my-project-name
 ```
 
 projectctl automatically updated `~/.projectctl/allowed-dirs`.

@@ -1,14 +1,13 @@
-use std::{collections::HashMap, fs::OpenOptions, path::Path};
+use std::{fs::OpenOptions, path::Path};
 
-use liquid::{
-    model::{KString, ScalarCow, Value},
-    Object, ParserBuilder,
-};
-use log::{debug, info, log_enabled, trace, Level};
+use liquid::{to_object, Object, ParserBuilder};
+use log::{debug, info, trace};
+use serde_json::Value;
 #[cfg(test)]
 use stub_trait::stub;
 
 use crate::{
+    cli::Values,
     err::{Error, LiquidErrorSource, Result},
     fs::{DefaultFileSystem, FileSystem},
 };
@@ -16,11 +15,9 @@ use crate::{
 const GIT_DIRNAME: &str = ".git";
 const LIQUID_EXTENSION: &str = "liquid";
 
-pub type Vars = HashMap<String, String>;
-
 #[cfg_attr(test, stub)]
 pub trait Renderer {
-    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result<()>;
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, values: Values) -> Result<()>;
 }
 
 pub struct LiquidRenderer {
@@ -100,23 +97,17 @@ impl LiquidRenderer {
 }
 
 impl Renderer for LiquidRenderer {
-    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, vars: Vars) -> Result<()> {
+    fn render_recursively(&self, tpl_dirpath: &Path, dest: &Path, values: Values) -> Result<()> {
         info!(
             "Rendering files from template `{}`",
             tpl_dirpath.file_name().unwrap().to_string_lossy(),
         );
-        if log_enabled!(Level::Debug) {
-            let s = vars
-                .iter()
-                .map(|(key, val)| format!("{}: `{}`", key, val))
-                .reduce(|accum, item| format!("{}, {}", accum, item))
-                .unwrap_or_default();
-            debug!("Variables: {{{}}}", s);
-        }
-        let mut obj = Object::new();
-        for (key, val) in vars.into_iter() {
-            obj.insert(KString::from(key), Value::Scalar(ScalarCow::from(val)));
-        }
+        let values = Value::Object(values);
+        debug!("Variables: {}", values);
+        let obj = to_object(&values).map_err(|cause| Error::Liquid {
+            cause,
+            src: LiquidErrorSource::Values,
+        })?;
         self.do_render_recursively(tpl_dirpath, dest, &obj)
     }
 }
@@ -129,6 +120,7 @@ mod test {
     };
 
     use git2::Repository;
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::*;
@@ -149,7 +141,7 @@ mod test {
             struct Parameters {
                 files_content: String,
                 tpled_dirname: PathBuf,
-                vars: HashMap<String, String>,
+                values: Values,
             }
 
             #[test]
@@ -161,7 +153,7 @@ mod test {
                     |_| Parameters {
                         files_content: format!("{{{{{}}}}}", var_key),
                         tpled_dirname: tpled_dirname.clone(),
-                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                        values: json!({ var_key: var_val }).as_object().unwrap().to_owned(),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
@@ -184,7 +176,7 @@ mod test {
                     |_| Parameters {
                         files_content: format!("{{{{{}}}}}", var_key),
                         tpled_dirname: tpled_dirname.clone(),
-                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                        values: json!({ var_key: var_val }).as_object().unwrap().to_owned(),
                     },
                     |_, res| match res.unwrap_err() {
                         Error::Liquid { src, .. } => match src {
@@ -209,7 +201,7 @@ mod test {
                         move |_| Parameters {
                             files_content: format!("{{{{{} | min}}}}", var_key),
                             tpled_dirname: tpled_dirname.clone(),
-                            vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                            values: json!({ var_key: var_val }).as_object().unwrap().to_owned(),
                         }
                     },
                     |ctx, res| match res.unwrap_err() {
@@ -239,7 +231,7 @@ mod test {
                         move |_| Parameters {
                             files_content: format!("{{{{{}2}}}}", var_key),
                             tpled_dirname: tpled_dirname.clone(),
-                            vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                            values: json!({ var_key: var_val }).as_object().unwrap().to_owned(),
                         }
                     },
                     |ctx, res| match res.unwrap_err() {
@@ -267,7 +259,7 @@ mod test {
                     |_| Parameters {
                         files_content: files_content.clone(),
                         tpled_dirname: PathBuf::from(format!("{{{{{}}}}}", var_key)),
-                        vars: HashMap::from_iter([(var_key.into(), var_val.into())]),
+                        values: json!({ var_key: var_val }).as_object().unwrap().to_owned(),
                     },
                     |ctx, res| {
                         res.unwrap();
@@ -304,7 +296,7 @@ mod test {
                 let renderer = LiquidRenderer {
                     fs: Box::new(DefaultFileSystem),
                 };
-                let res = renderer.render_recursively(&ctx.tpl_dirpath, &ctx.dest, params.vars);
+                let res = renderer.render_recursively(&ctx.tpl_dirpath, &ctx.dest, params.values);
                 assert_fn(&ctx, res);
             }
         }
