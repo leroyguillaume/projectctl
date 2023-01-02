@@ -1,10 +1,15 @@
-use std::env::{var, VarError};
+use std::{
+    collections::HashMap,
+    env::{var, vars, VarError},
+};
 
 use log::trace;
 
 #[cfg_attr(test, stub_trait::stub)]
 pub trait System {
     fn env_var(&self, key: &str) -> Option<String>;
+
+    fn env_vars(&self) -> HashMap<String, String>;
 }
 
 pub struct DefaultSystem;
@@ -22,6 +27,11 @@ impl System for DefaultSystem {
                 VarError::NotUnicode(val) => Some(val.to_string_lossy().to_string()),
             },
         }
+    }
+
+    fn env_vars(&self) -> HashMap<String, String> {
+        trace!("Fetching all environment variables");
+        vars().collect()
     }
 }
 
@@ -80,6 +90,17 @@ mod test {
                 let params = create_params_fn();
                 let res = DefaultSystem.env_var(&params.key);
                 assert_fn(res);
+            }
+        }
+
+        mod env_vars {
+            use super::*;
+
+            #[test]
+            fn ok() {
+                let expected_vars: HashMap<String, String> = vars().collect();
+                let vars = DefaultSystem.env_vars();
+                assert_eq!(vars, expected_vars);
             }
         }
     }
