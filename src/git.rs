@@ -5,7 +5,7 @@ use log::{debug, trace, warn};
 #[cfg(test)]
 use stub_trait::stub;
 
-use crate::err::{Error, Result};
+use crate::err::{Error, ErrorKind, Result};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Reference {
@@ -36,7 +36,7 @@ impl DefaultGit {
         debug!("Reading git default configuration");
         Self {
             cfg: Config::open_default().unwrap_or_else(|err| {
-                warn!("{}", Error::Git(err));
+                warn!("Unable to read default git configuration: {}", err);
                 Config::new().unwrap()
             }),
         }
@@ -51,29 +51,47 @@ impl Git for DefaultGit {
         dest: &Path,
     ) -> Result<Repository> {
         debug!("Cloning {} into {}", url, dest.display());
-        let repo = Repository::clone(url, dest).map_err(Error::Git)?;
+        let repo = Repository::clone(url, dest).map_err(|err| Error {
+            kind: ErrorKind::Git(err),
+            msg: format!("Unable to clone {} into {}", url, dest.display()),
+        })?;
         if let Some(reference) = reference {
             let reference = match reference {
                 Reference::Branch(branch) => format!("refs/remotes/origin/{}", branch),
                 Reference::Tag(tag) => format!("refs/tags/{}", tag),
             };
             debug!("Setting HEAD to {}", reference);
-            repo.set_head(&reference).map_err(Error::Git)?;
+            repo.set_head(&reference).map_err(|err| Error {
+                kind: ErrorKind::Git(err),
+                msg: format!("Unable to setting HEAD to {}", reference),
+            })?;
             trace!("Checking out HEAD");
             repo.checkout_head(Some(CheckoutBuilder::new().force()))
-                .map_err(Error::Git)?;
+                .map_err(|err| Error {
+                    kind: ErrorKind::Git(err),
+                    msg: "Unable to checkout HEAD".into(),
+                })?;
         }
         Ok(repo)
     }
 
     fn default_config_value(&self, key: &str) -> Result<String> {
         debug!("Reading `{}` from git default configuration", key);
-        self.cfg.get_string(key).map_err(Error::Git)
+        self.cfg.get_string(key).map_err(|err| Error {
+            kind: ErrorKind::Git(err),
+            msg: format!("Unable to get value of git configuration key `{}`", key),
+        })
     }
 
     fn init(&self, path: &Path) -> Result<Repository> {
         debug!("Initializing git repository into {}", path.display());
-        Repository::init(path).map_err(Error::Git)
+        Repository::init(path).map_err(|err| Error {
+            kind: ErrorKind::Git(err),
+            msg: format!(
+                "Unable to initialize git repository into {}",
+                path.display()
+            ),
+        })
     }
 }
 

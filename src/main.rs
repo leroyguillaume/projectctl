@@ -12,12 +12,13 @@ mod sys;
 
 use std::{io::stdout, process::exit};
 
+use crate::err::ErrorKind;
+
 use self::log::Logger;
 use ::log::error;
 use clap::Parser;
 use cli::Arguments;
 use cmd::CommandKind;
-use err::Error;
 
 fn main() {
     let args = Arguments::parse();
@@ -33,13 +34,24 @@ fn main() {
         Ok(()) => exitcode::OK,
         Err(err) => {
             error!("{}", err);
-            match err {
-                Error::InvalidConfig { ref causes, .. } => {
-                    for cause in causes {
+            match err.kind {
+                ErrorKind::InvalidConfig(ref errs) => {
+                    for cause in errs {
                         error!("{}", cause);
                     }
                 }
-                Error::Liquid { ref cause, .. } => error!("{}", cause),
+                ErrorKind::Liquid(ref err) => error!("{}", err),
+                ErrorKind::ScriptFailed {
+                    rc,
+                    ref stderr,
+                    ref stdout,
+                } => {
+                    if let Some(rc) = rc {
+                        error!("Return code: {}", rc);
+                    }
+                    error!("stdout:\n{}", stdout);
+                    error!("stderr:\n{}", stderr);
+                }
                 _ => (),
             }
             err.to_return_code()

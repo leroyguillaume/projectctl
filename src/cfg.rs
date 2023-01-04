@@ -10,7 +10,7 @@ use log::{debug, info, trace, warn};
 use serde_json::Value;
 
 use crate::{
-    err::{Error, Result},
+    err::{Error, ErrorKind, Result},
     fs::{DefaultFileSystem, FileSystem},
 };
 
@@ -97,14 +97,13 @@ impl DefaultConfigLoader {
         info!("Loading configuration");
         let file = fs.open(filepath, OpenOptions::new().read(true).to_owned(), false)?;
         debug!("Loading file {}", filepath.display());
-        let cfg_val: Value =
-            serde_yaml::from_reader(file).map_err(|cause| Error::MalformedConfig {
-                cause,
-                path: filepath.to_path_buf(),
-            })?;
+        let cfg_val: Value = serde_yaml::from_reader(file).map_err(|err| Error {
+            kind: ErrorKind::MalformedConfig(err),
+            msg: format!("Unable to load configuration file {}", filepath.display()),
+        })?;
         debug!("Validating configuration");
         schema.validate(&cfg_val).map_err(|iter| {
-            let causes = iter
+            let errs = iter
                 .map(|err| ValidationError {
                     instance: Cow::Owned(err.instance.into_owned()),
                     instance_path: err.instance_path,
@@ -112,9 +111,9 @@ impl DefaultConfigLoader {
                     schema_path: err.schema_path,
                 })
                 .collect();
-            Error::InvalidConfig {
-                causes,
-                path: filepath.to_path_buf(),
+            Error {
+                kind: ErrorKind::InvalidConfig(errs),
+                msg: format!("Configuration file {} is invalid", filepath.display()),
             }
         })?;
         if let Value::Object(cfg_val) = cfg_val {
@@ -177,9 +176,9 @@ mod test {
                         cfg1_content: "{",
                         cfg2_content: "",
                     },
-                    |ctx, res| match res.unwrap_err() {
-                        Error::MalformedConfig { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
-                        err => panic!("expected MalformedYaml (actual: {:?})", err),
+                    |_, res| match res.unwrap_err().kind {
+                        ErrorKind::MalformedConfig(_) => (),
+                        kind => panic!("expected MalformedConfig (actual: {:?})", kind),
                     },
                 );
             }
@@ -191,9 +190,9 @@ mod test {
                         cfg1_content: "key: value",
                         cfg2_content: "",
                     },
-                    |ctx, res| match res.unwrap_err() {
-                        Error::InvalidConfig { path, .. } => assert_eq!(path, ctx.cfg1_filepath),
-                        err => panic!("expected InvalidConfig (actual: {:?})", err),
+                    |_, res| match res.unwrap_err().kind {
+                        ErrorKind::InvalidConfig(_) => (),
+                        kind => panic!("expected InvalidConfig (actual: {:?})", kind),
                     },
                 );
             }

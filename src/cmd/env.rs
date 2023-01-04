@@ -9,7 +9,7 @@ use regex::Regex;
 use crate::{
     cfg::{ConfigLoader, DefaultConfigLoader, EnvVarKind},
     cli::EnvCommandArguments,
-    err::{Error, Result},
+    err::{Error, ErrorKind, Result},
     paths::{DefaultPaths, Paths},
     script::{DefaultScriptRunner, ScriptRunner},
 };
@@ -50,6 +50,13 @@ impl EnvCommand {
             };
             if let Err(err) = res {
                 error!("Unable to compute value of `{}`: {}", key, err);
+                if let ErrorKind::ScriptFailed { rc, stderr, stdout } = err.kind {
+                    if let Some(rc) = rc {
+                        error!("Return code: {}", rc);
+                    }
+                    error!("stdout:\n{}", stdout);
+                    error!("stderr:\n{}", stderr);
+                }
             }
         }
         Ok(())
@@ -59,7 +66,10 @@ impl EnvCommand {
     fn write_export_statement(key: &str, val: &str, out: &mut dyn Write) -> Result<()> {
         let escape_regex = Regex::new(SPECIAL_CHARS_PATTERN).unwrap();
         let val = escape_regex.replace_all(val, "\\$0");
-        writeln!(out, "export {}=\"{}\"", key, val).map_err(Error::IO)
+        writeln!(out, "export {}=\"{}\"", key, val).map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: "Unable to write statement".into(),
+        })
     }
 }
 
@@ -211,7 +221,12 @@ mod test {
                         if script == ctx.run_ok_script {
                             Ok(ctx.run_ok_val.into())
                         } else if script == ctx.run_ko_script {
-                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            Err(Error {
+                                kind: ErrorKind::IO(io::Error::from(
+                                    io::ErrorKind::PermissionDenied,
+                                )),
+                                msg: "error".into(),
+                            })
                         } else {
                             panic!("unexpected call of run");
                         }
