@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use git2::Config;
 use log::{debug, info, warn};
 use serde_json::Value;
 
@@ -21,13 +22,7 @@ use crate::{
 const DESCRIPTION_VALUES_KEY: &str = "description";
 const ENV_VALUES_KEY: &str = "env";
 const GIT_VALUES_KEY: &str = "git";
-const GIT_USER_VALUES_KEY: &str = "user";
-const GIT_USER_EMAIL_VALUES_KEY: &str = "email";
-const GIT_USER_NAME_VALUES_KEY: &str = "name";
 const NAME_VALUES_KEY: &str = "name";
-
-const GIT_USER_EMAIL_CONFIG_KEY: &str = "user.email";
-const GIT_USER_NAME_CONFIG_KEY: &str = "user.name";
 
 const GITIGNORE_FILENAME: &str = ".gitignore";
 const FILENAMES_TO_IGNORE: [&str; 1] = [LOCAL_CONFIG_FILENAME];
@@ -49,7 +44,7 @@ impl NewCommand {
         Self {
             args,
             fs: Box::new(DefaultFileSystem),
-            git: Box::new(DefaultGit::new()),
+            git: Box::new(DefaultGit),
             paths: Box::new(DefaultPaths::new()),
             renderer: Box::new(LiquidRenderer::new()),
             values_loader: Box::new(DefaultValuesLoader::new()),
@@ -214,18 +209,77 @@ struct DefaultValuesLoader {
 impl DefaultValuesLoader {
     fn new() -> Self {
         Self {
-            git: Box::new(DefaultGit::new()),
+            git: Box::new(DefaultGit),
             sys: Box::new(DefaultSystem),
         }
     }
 
     #[inline]
-    fn load_git_var(var_key: &str, git: &dyn Git) -> Option<String> {
-        match git.default_config_value(var_key) {
-            Ok(val) => Some(val),
-            Err(err) => {
-                warn!("{}", err);
-                None
+    fn git_config_to_values(cfg: &Config) -> Values {
+        let mut values = Values::new();
+        match cfg.entries(None) {
+            Ok(mut entries) => {
+                while let Some(entry) = entries.next() {
+                    match entry {
+                        Ok(entry) => {
+                            let key = String::from_utf8_lossy(entry.name_bytes()).to_string();
+                            let val = String::from_utf8_lossy(entry.value_bytes()).to_string();
+                            let key: Vec<&str> = key.split('.').collect();
+                            Self::insert_git_config_entry_in_values(0, &key, val, &mut values);
+                        }
+                        Err(err) => {
+                            warn!("One of git configuration entry cannot be loaded: {}", err)
+                        }
+                    }
+                }
+            }
+            Err(err) => warn!("Values of git configuration cannot be loaded: {}", err),
+        }
+        values
+    }
+
+    fn insert_git_config_entry_in_values(
+        idx: usize,
+        key: &[&str],
+        val: String,
+        values: &mut Values,
+    ) {
+        if idx == key.len() - 1 {
+            let val = Value::String(val);
+            if let Some(prev_val) = values.insert(key[idx].into(), val.clone()) {
+                warn!(
+                    "Value `{}.{}` is overriden (`{}` over `{}`)",
+                    GIT_VALUES_KEY,
+                    key.join("."),
+                    prev_val,
+                    val
+                );
+            }
+        } else {
+            match values.get_mut(key[idx]) {
+                Some(child) => match child {
+                    Value::Object(child) => {
+                        Self::insert_git_config_entry_in_values(idx + 1, key, val, child)
+                    }
+                    prev_val => {
+                        let mut child = Values::new();
+                        Self::insert_git_config_entry_in_values(idx + 1, key, val, &mut child);
+                        let child = Value::Object(child);
+                        warn!(
+                            "Value `{}.{}` is overriden (`{}` over `{}`)",
+                            GIT_VALUES_KEY,
+                            key[0..idx].join("."),
+                            prev_val,
+                            &child
+                        );
+                        values.insert(key[idx].into(), child);
+                    }
+                },
+                None => {
+                    let mut child = Values::new();
+                    Self::insert_git_config_entry_in_values(idx + 1, key, val, &mut child);
+                    values.insert(key[idx].into(), Value::Object(child));
+                }
             }
         }
     }
@@ -245,16 +299,15 @@ impl ValuesLoader for DefaultValuesLoader {
         }
         root.insert(ENV_VALUES_KEY.into(), Value::Object(env));
 
-        let mut git = Values::new();
-        let mut git_user = Values::new();
-        if let Some(username) = Self::load_git_var(GIT_USER_NAME_CONFIG_KEY, self.git.as_ref()) {
-            git_user.insert(GIT_USER_NAME_VALUES_KEY.into(), Value::String(username));
+        match self.git.load_default_config() {
+            Ok(cfg) => {
+                root.insert(
+                    GIT_VALUES_KEY.into(),
+                    Value::Object(Self::git_config_to_values(&cfg)),
+                );
+            }
+            Err(err) => warn!("Values of git configuration cannot be loaded: {}", err),
         }
-        if let Some(email) = Self::load_git_var(GIT_USER_EMAIL_CONFIG_KEY, self.git.as_ref()) {
-            git_user.insert(GIT_USER_EMAIL_VALUES_KEY.into(), Value::String(email));
-        }
-        git.insert(GIT_USER_VALUES_KEY.into(), Value::Object(git_user));
-        root.insert(GIT_VALUES_KEY.into(), Value::Object(git));
 
         if let Some(values) = values {
             root.extend(values);
@@ -272,7 +325,7 @@ mod test {
         path::PathBuf,
     };
 
-    use git2::Repository;
+    use git2::{ConfigLevel, Repository};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -1160,25 +1213,24 @@ mod test {
             struct Context {
                 env_var_key: &'static str,
                 env_var_val: &'static str,
-                git_email: &'static str,
-                git_username: &'static str,
+                git_cfg_key1: &'static str,
+                git_cfg_key1_1: &'static str,
+                git_cfg_val1_1: &'static str,
                 name: &'static str,
             }
 
             struct Parameters {
                 desc: Option<String>,
-                fail_git_username_retrieving: bool,
-                fail_git_email_retrieving: bool,
+                fail_git_config_loading: bool,
                 values: Option<Values>,
             }
 
             #[test]
-            fn values_when_git_username_retrieving_failed() {
+            fn values_when_git_cfg_loading_failed() {
                 test(
                     |_| Parameters {
                         desc: None,
-                        fail_git_email_retrieving: false,
-                        fail_git_username_retrieving: true,
+                        fail_git_config_loading: true,
                         values: None,
                     },
                     |ctx, values| {
@@ -1186,40 +1238,6 @@ mod test {
                             NAME_VALUES_KEY: ctx.name,
                             ENV_VALUES_KEY: {
                                 ctx.env_var_key: ctx.env_var_val
-                            },
-                            GIT_VALUES_KEY: {
-                                GIT_USER_VALUES_KEY: {
-                                    GIT_USER_EMAIL_VALUES_KEY: ctx.git_email
-                                }
-                            }
-                        })
-                        .as_object()
-                        .unwrap()
-                        .to_owned();
-                        assert_eq!(values, expected_values);
-                    },
-                )
-            }
-
-            #[test]
-            fn values_when_git_email_retrieving_failed() {
-                test(
-                    |_| Parameters {
-                        desc: None,
-                        fail_git_email_retrieving: true,
-                        fail_git_username_retrieving: false,
-                        values: None,
-                    },
-                    |ctx, values| {
-                        let expected_values = json!({
-                            NAME_VALUES_KEY: ctx.name,
-                            ENV_VALUES_KEY: {
-                                ctx.env_var_key: ctx.env_var_val
-                            },
-                            GIT_VALUES_KEY: {
-                                GIT_USER_VALUES_KEY: {
-                                    GIT_USER_NAME_VALUES_KEY: ctx.git_username
-                                }
                             }
                         })
                         .as_object()
@@ -1239,8 +1257,7 @@ mod test {
                 test(
                     |ctx| Parameters {
                         desc: Some(desc.into()),
-                        fail_git_email_retrieving: false,
-                        fail_git_username_retrieving: false,
+                        fail_git_config_loading: false,
                         values: Some(
                             json!({
                                 NAME_VALUES_KEY: name_fn(ctx),
@@ -1259,9 +1276,8 @@ mod test {
                                 ctx.env_var_key: ctx.env_var_val
                             },
                             GIT_VALUES_KEY: {
-                                GIT_USER_VALUES_KEY: {
-                                    GIT_USER_EMAIL_VALUES_KEY: ctx.git_email,
-                                    GIT_USER_NAME_VALUES_KEY: ctx.git_username
+                                ctx.git_cfg_key1: {
+                                    ctx.git_cfg_key1_1: ctx.git_cfg_val1_1
                                 }
                             },
                             var_key: var_val
@@ -1281,38 +1297,28 @@ mod test {
                 let ctx = Context {
                     env_var_key: "KEY",
                     env_var_val: "VAL",
-                    git_email: "user@test",
-                    git_username: "test",
+                    git_cfg_key1: "user",
+                    git_cfg_key1_1: "name",
+                    git_cfg_val1_1: "test",
                     name: "my-project",
                 };
                 let params = create_params_fn(&ctx);
-                let git = StubGit::new().with_stub_of_default_config_value(move |i, key| {
-                    if i == 0 {
-                        assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
-                        if params.fail_git_username_retrieving {
-                            Err(Error {
-                                kind: ErrorKind::IO(io::Error::from(
-                                    io::ErrorKind::PermissionDenied,
-                                )),
-                                msg: "error".into(),
-                            })
-                        } else {
-                            Ok(ctx.git_username.into())
-                        }
-                    } else if i == 1 {
-                        assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
-                        if params.fail_git_email_retrieving {
-                            Err(Error {
-                                kind: ErrorKind::IO(io::Error::from(
-                                    io::ErrorKind::PermissionDenied,
-                                )),
-                                msg: "error".into(),
-                            })
-                        } else {
-                            Ok(ctx.git_email.into())
-                        }
+                let git = StubGit::new().with_stub_of_load_default_config(move |_| {
+                    if params.fail_git_config_loading {
+                        Err(Error {
+                            kind: ErrorKind::IO(io::Error::from(io::ErrorKind::PermissionDenied)),
+                            msg: "error".into(),
+                        })
                     } else {
-                        panic!("unexpected call of default_config_value");
+                        let mut cfg = Config::new().unwrap();
+                        let filepath = tempdir().unwrap().into_path().join("gitconfig");
+                        cfg.add_file(&filepath, ConfigLevel::Global, false).unwrap();
+                        cfg.set_str(
+                            &format!("{}.{}", ctx.git_cfg_key1, ctx.git_cfg_key1_1),
+                            ctx.git_cfg_val1_1,
+                        )
+                        .unwrap();
+                        Ok(cfg)
                     }
                 });
                 let sys = StubSystem::new().with_stub_of_env_vars(|_| {

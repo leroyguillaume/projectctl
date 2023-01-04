@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use git2::{build::CheckoutBuilder, Config, Repository};
-use log::{debug, trace, warn};
+use log::{debug, trace};
 #[cfg(test)]
 use stub_trait::stub;
 
@@ -22,26 +22,12 @@ pub trait Git {
         dest: &Path,
     ) -> Result<Repository>;
 
-    fn default_config_value(&self, key: &str) -> Result<String>;
-
     fn init(&self, path: &Path) -> Result<Repository>;
+
+    fn load_default_config(&self) -> Result<Config>;
 }
 
-pub struct DefaultGit {
-    cfg: Config,
-}
-
-impl DefaultGit {
-    pub fn new() -> Self {
-        debug!("Reading git default configuration");
-        Self {
-            cfg: Config::open_default().unwrap_or_else(|err| {
-                warn!("Unable to read default git configuration: {}", err);
-                Config::new().unwrap()
-            }),
-        }
-    }
-}
+pub struct DefaultGit;
 
 impl Git for DefaultGit {
     fn checkout_repository(
@@ -75,14 +61,6 @@ impl Git for DefaultGit {
         Ok(repo)
     }
 
-    fn default_config_value(&self, key: &str) -> Result<String> {
-        debug!("Reading `{}` from git default configuration", key);
-        self.cfg.get_string(key).map_err(|err| Error {
-            kind: ErrorKind::Git(err),
-            msg: format!("Unable to get value of git configuration key `{}`", key),
-        })
-    }
-
     fn init(&self, path: &Path) -> Result<Repository> {
         debug!("Initializing git repository into {}", path.display());
         Repository::init(path).map_err(|err| Error {
@@ -93,11 +71,20 @@ impl Git for DefaultGit {
             ),
         })
     }
+
+    fn load_default_config(&self) -> Result<Config> {
+        debug!("Loading default git configuration");
+        Config::open_default().map_err(|err| Error {
+            kind: ErrorKind::Git(err),
+            msg: "Unable to load default git configuration".into(),
+        })
+    }
 }
 
 #[cfg(test)]
 mod test {
     use std::{
+        collections::HashMap,
         fs::{read_to_string, write},
         path::PathBuf,
     };
@@ -235,10 +222,7 @@ mod test {
                         false,
                     )
                     .unwrap();
-                let git = DefaultGit {
-                    cfg: Config::open_default().unwrap(),
-                };
-                let res = git.checkout_repository(
+                let res = DefaultGit.checkout_repository(
                     remote_dirpath.to_str().unwrap(),
                     params.reference,
                     &dest,
@@ -253,11 +237,29 @@ mod test {
             #[test]
             fn ok() {
                 let path = tempdir().unwrap().into_path();
-                let git = DefaultGit {
-                    cfg: Config::open_default().unwrap(),
-                };
-                let repo = git.init(&path).unwrap();
+                let repo = DefaultGit.init(&path).unwrap();
                 assert!(repo.is_empty().unwrap());
+            }
+        }
+
+        mod load_default_config {
+            use super::*;
+
+            #[test]
+            fn ok() {
+                let expected_cfg = Config::open_default().unwrap();
+                let cfg = DefaultGit.load_default_config().unwrap();
+                assert_eq!(config_to_map(cfg), config_to_map(expected_cfg));
+            }
+
+            fn config_to_map(cfg: Config) -> HashMap<String, String> {
+                let mut map: HashMap<String, String> = HashMap::new();
+                let mut entries = cfg.entries(None).unwrap();
+                while let Some(entry) = entries.next() {
+                    let entry = entry.unwrap();
+                    map.insert(entry.name().unwrap().into(), entry.value().unwrap().into());
+                }
+                map
             }
         }
     }
