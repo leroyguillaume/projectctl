@@ -6,7 +6,7 @@ use std::{
 };
 
 use log::{debug, info, warn};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{
     cli::{NewCommandArguments, Values},
@@ -15,9 +15,11 @@ use crate::{
     git::{DefaultGit, Git, Reference},
     paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME, PROJECT_CONFIG_FILENAME},
     renderer::{LiquidRenderer, Renderer},
+    sys::{DefaultSystem, System},
 };
 
 const DESCRIPTION_VALUES_KEY: &str = "description";
+const ENV_VALUES_KEY: &str = "env";
 const GIT_VALUES_KEY: &str = "git";
 const GIT_USER_VALUES_KEY: &str = "user";
 const GIT_USER_EMAIL_VALUES_KEY: &str = "email";
@@ -203,12 +205,14 @@ trait ValuesLoader {
 
 struct DefaultValuesLoader {
     git: Box<dyn Git>,
+    sys: Box<dyn System>,
 }
 
 impl DefaultValuesLoader {
     fn new() -> Self {
         Self {
             git: Box::new(DefaultGit::new()),
+            sys: Box::new(DefaultSystem),
         }
     }
 
@@ -226,13 +230,20 @@ impl DefaultValuesLoader {
 
 impl ValuesLoader for DefaultValuesLoader {
     fn load(&self, name: String, desc: Option<String>, values: Option<Values>) -> Values {
-        let mut root = Map::new();
+        let mut root = Values::new();
         root.insert(NAME_VALUES_KEY.into(), Value::String(name));
         if let Some(desc) = desc {
             root.insert(DESCRIPTION_VALUES_KEY.into(), Value::String(desc));
         }
-        let mut git = Map::new();
-        let mut git_user = Map::new();
+
+        let mut env = Values::new();
+        for (key, val) in self.sys.env_vars() {
+            env.insert(key, Value::String(val));
+        }
+        root.insert(ENV_VALUES_KEY.into(), Value::Object(env));
+
+        let mut git = Values::new();
+        let mut git_user = Values::new();
         if let Some(username) = Self::load_git_var(GIT_USER_NAME_CONFIG_KEY, self.git.as_ref()) {
             git_user.insert(GIT_USER_NAME_VALUES_KEY.into(), Value::String(username));
         }
@@ -241,6 +252,7 @@ impl ValuesLoader for DefaultValuesLoader {
         }
         git.insert(GIT_USER_VALUES_KEY.into(), Value::Object(git_user));
         root.insert(GIT_VALUES_KEY.into(), Value::Object(git));
+
         if let Some(values) = values {
             root.extend(values);
         }
@@ -251,6 +263,7 @@ impl ValuesLoader for DefaultValuesLoader {
 #[cfg(test)]
 mod test {
     use std::{
+        collections::HashMap,
         fs::{create_dir_all, read_to_string, remove_dir_all, write},
         io::{self},
         path::PathBuf,
@@ -262,7 +275,7 @@ mod test {
 
     use crate::{
         err::LiquidErrorSource, fs::StubFileSystem, git::StubGit, paths::StubPaths,
-        renderer::StubRenderer,
+        renderer::StubRenderer, sys::StubSystem,
     };
 
     use super::*;
@@ -1103,6 +1116,8 @@ mod test {
             use super::*;
 
             struct Context {
+                env_var_key: &'static str,
+                env_var_val: &'static str,
                 git_email: &'static str,
                 git_username: &'static str,
                 name: &'static str,
@@ -1127,6 +1142,9 @@ mod test {
                     |ctx, values| {
                         let expected_values = json!({
                             NAME_VALUES_KEY: ctx.name,
+                            ENV_VALUES_KEY: {
+                                ctx.env_var_key: ctx.env_var_val
+                            },
                             GIT_VALUES_KEY: {
                                 GIT_USER_VALUES_KEY: {
                                     GIT_USER_EMAIL_VALUES_KEY: ctx.git_email
@@ -1153,6 +1171,9 @@ mod test {
                     |ctx, values| {
                         let expected_values = json!({
                             NAME_VALUES_KEY: ctx.name,
+                            ENV_VALUES_KEY: {
+                                ctx.env_var_key: ctx.env_var_val
+                            },
                             GIT_VALUES_KEY: {
                                 GIT_USER_VALUES_KEY: {
                                     GIT_USER_NAME_VALUES_KEY: ctx.git_username
@@ -1192,6 +1213,9 @@ mod test {
                         let expected_values = json!({
                             NAME_VALUES_KEY: name_fn(ctx),
                             DESCRIPTION_VALUES_KEY: desc,
+                            ENV_VALUES_KEY: {
+                                ctx.env_var_key: ctx.env_var_val
+                            },
                             GIT_VALUES_KEY: {
                                 GIT_USER_VALUES_KEY: {
                                     GIT_USER_EMAIL_VALUES_KEY: ctx.git_email,
@@ -1213,6 +1237,8 @@ mod test {
                 assert_fn: A,
             ) {
                 let ctx = Context {
+                    env_var_key: "KEY",
+                    env_var_val: "VAL",
                     git_email: "user@test",
                     git_username: "test",
                     name: "my-project",
@@ -1237,7 +1263,13 @@ mod test {
                         panic!("unexpected call of default_config_value");
                     }
                 });
-                let loader = DefaultValuesLoader { git: Box::new(git) };
+                let sys = StubSystem::new().with_stub_of_env_vars(|_| {
+                    HashMap::from_iter([(ctx.env_var_key.into(), ctx.env_var_val.into())])
+                });
+                let loader = DefaultValuesLoader {
+                    git: Box::new(git),
+                    sys: Box::new(sys),
+                };
                 let values = loader.load(ctx.name.into(), params.desc, params.values);
                 assert_fn(&ctx, values);
             }

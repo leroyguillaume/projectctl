@@ -69,6 +69,7 @@ By default, [leroyguillaume/projectctl-templates](https://github.com/leroyguilla
 projectctl injects some variables:
 - `name` that has for value the project name
 - `description` that has for value the project description (can be set with `-d` option, unset by default)
+- `env` that contains all environment variables
 - `git.user.name` that has for value the git username (can be undefined if it is not set in default git configuration)
 - `git.user.email` that has for value the email of the git user (can be undefined if it is not set in default git configuration)
 
