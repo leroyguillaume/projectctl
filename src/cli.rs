@@ -8,7 +8,7 @@ use crate::{
     cmd::{
         destroy::DestroyCommand, env::EnvCommand, hook::HookCommand, new::NewCommand, CommandKind,
     },
-    err::{Error, Result},
+    err::{Error, ErrorKind, Result},
 };
 
 pub type Values = Map<String, Value>;
@@ -252,9 +252,16 @@ impl NewCommandArguments {
 }
 
 fn parse_values(json: &str) -> Result<Values> {
-    match serde_json::from_str(json).map_err(Error::MalformedValues)? {
+    let values = serde_json::from_str(json).map_err(|err| Error {
+        kind: ErrorKind::MalformedValues(err),
+        msg: "Invalid JSON object".into(),
+    })?;
+    match values {
         Value::Object(json) => Ok(json),
-        _ => Err(Error::NotAJsonObject),
+        _ => Err(Error {
+            kind: ErrorKind::NotAJSONObject,
+            msg: "Must be a JSON object".into(),
+        }),
     }
 }
 
@@ -446,9 +453,9 @@ mod test {
                 || Parameters {
                     arg: "\"test\"".into(),
                 },
-                |res| match res.unwrap_err() {
-                    Error::NotAJsonObject => (),
-                    err => panic!("expected NotAJsonObject (actual: {:?})", err),
+                |res| match res.unwrap_err().kind {
+                    ErrorKind::NotAJSONObject => (),
+                    kind => panic!("expected NotAJSONObject (actual: {:?})", kind),
                 },
             )
         }

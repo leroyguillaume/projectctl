@@ -1,7 +1,7 @@
 use std::{
     env::current_dir,
     fs::{create_dir_all, read_to_string, remove_dir_all, File, OpenOptions, ReadDir},
-    io::{self, copy, Write},
+    io::{copy, Write},
     path::{Path, PathBuf},
 };
 
@@ -10,19 +10,15 @@ use home::home_dir;
 use log::{debug, trace};
 use tempfile::tempdir;
 
-use crate::err::{Error, Result};
+use crate::err::{Error, ErrorKind, Result};
 
 macro_rules! write_into {
     ($path:expr, $file:expr, $($arg:tt)*) => {
         std::write!($file, $($arg)*).map_err(|err| {
-            crate::err::Error::IO(std::io::Error::new(
-                err.kind(),
-                format!(
-                    "Unable to write into file {}: {}",
-                    $path.display(),
-                    err,
-                ),
-            ))
+            crate::err::Error {
+                kind: crate::err::ErrorKind::IO(err),
+                msg: format!("Unable to write into file {}", $path.display()),
+            }
         })
     };
 }
@@ -31,14 +27,10 @@ pub(crate) use write_into;
 macro_rules! writeln_into {
     ($path:expr, $file:expr, $($arg:tt)*) => {
         std::writeln!($file, $($arg)*).map_err(|err| {
-            crate::err::Error::IO(std::io::Error::new(
-                err.kind(),
-                format!(
-                    "Unable to write into file {}: {}",
-                    $path.display(),
-                    err,
-                ),
-            ))
+            crate::err::Error {
+                kind: crate::err::ErrorKind::IO(err),
+                msg: format!("Unable to write into file {}", $path.display()),
+            }
         })
     };
 }
@@ -46,15 +38,7 @@ pub(crate) use writeln_into;
 
 #[cfg_attr(test, stub_trait::stub)]
 pub trait FileSystem {
-    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
-        trace!("Canonicalizing {}", path.display());
-        path.canonicalize().map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to canonicalize {}: {}", path.display(), err),
-            ))
-        })
-    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf>;
 
     fn copy(&self, src: &Path, dest: &Path, lock: bool) -> Result<()>;
 
@@ -82,6 +66,14 @@ pub trait FileSystem {
 pub struct DefaultFileSystem;
 
 impl FileSystem for DefaultFileSystem {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        trace!("Canonicalizing {}", path.display());
+        path.canonicalize().map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: format!("Unable to canonicalize {}", path.display()),
+        })
+    }
+
     fn copy(&self, src: &Path, dest: &Path, lock: bool) -> Result<()> {
         if let Some(parent) = dest.parent() {
             self.create_dir(parent)?;
@@ -95,27 +87,18 @@ impl FileSystem for DefaultFileSystem {
         )?;
         copy(&mut src_file, &mut dest_file)
             .map(|len| trace!("{} bytes copied", len))
-            .map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!(
-                        "Unable to copy {} into {}: {}",
-                        src.display(),
-                        dest.display(),
-                        err
-                    ),
-                ))
+            .map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: format!("Unable to copy {} into {}", src.display(), dest.display()),
             })
     }
 
     fn create_dir(&self, path: &Path) -> Result<()> {
         if !path.exists() {
             debug!("Creating directory {}", path.display());
-            create_dir_all(path).map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to create directory {}: {}", path.display(), err),
-                ))
+            create_dir_all(path).map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: format!("Unable to create directory {}", path.display()),
             })?;
         }
         Ok(())
@@ -125,31 +108,25 @@ impl FileSystem for DefaultFileSystem {
         trace!("Creating temporary directory");
         tempdir()
             .map(|temp_dir| temp_dir.into_path())
-            .map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to create temporary directory: {}", err),
-                ))
+            .map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: "Unable to create temporary directory".into(),
             })
     }
 
     fn cwd(&self) -> Result<PathBuf> {
         trace!("Getting current working directory");
-        current_dir().map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to get current working directory: {}", err),
-            ))
+        current_dir().map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: "Unable to get current working directory".into(),
         })
     }
 
     fn delete_dir(&self, path: &Path) -> Result<()> {
         debug!("Deleting directory {}", path.display());
-        remove_dir_all(path).map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to delete directory {}: {}", path.display(), err),
-            ))
+        remove_dir_all(path).map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: format!("Unable to to delete directory {}", path.display()),
         })
     }
 
@@ -171,11 +148,9 @@ impl FileSystem for DefaultFileSystem {
                 self.create_dir(parent)?;
             }
             debug!("Creating file {}", path.display());
-            File::create(path).map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to create file {}: {}", path.display(), err),
-                ))
+            File::create(path).map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: format!("Unable to create file {}", path.display()),
             })?;
         }
         Ok(())
@@ -216,26 +191,25 @@ impl FileSystem for DefaultFileSystem {
 
     fn home_dirpath(&self) -> Result<PathBuf> {
         trace!("Getting home directory");
-        home_dir().ok_or(Error::HomeNotFound)
+        home_dir().ok_or_else(|| Error {
+            kind: ErrorKind::HomeNotFound,
+            msg: "Unable to get home directory".into(),
+        })
     }
 
     fn open(&self, path: &Path, opts: OpenOptions, lock: bool) -> Result<File> {
         trace!("Opening file {}", path.display());
         opts.open(path)
-            .map_err(|err| {
-                Error::IO(io::Error::new(
-                    err.kind(),
-                    format!("Unable to open {}: {}", path.display(), err),
-                ))
+            .map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: format!("Unable to open {}", path.display()),
             })
             .and_then(|file| {
                 if lock {
                     trace!("Acquiring lock on {}", path.display());
-                    file.lock_exclusive().map(|_| file).map_err(|err| {
-                        Error::IO(io::Error::new(
-                            err.kind(),
-                            format!("Unable to acquire lock on {}: {}", path.display(), err),
-                        ))
+                    file.lock_exclusive().map(|_| file).map_err(|err| Error {
+                        kind: ErrorKind::IO(err),
+                        msg: format!("Unable to acquire lock on {}", path.display()),
                     })
                 } else {
                     Ok(file)
@@ -245,21 +219,17 @@ impl FileSystem for DefaultFileSystem {
 
     fn read_dir(&self, path: &Path) -> Result<ReadDir> {
         trace!("Reading directory {}", path.display());
-        path.read_dir().map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to read directory {}: {}", path.display(), err),
-            ))
+        path.read_dir().map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: format!("Unable to read directory {}", path.display()),
         })
     }
 
     fn read_to_string(&self, path: &Path) -> Result<String> {
         debug!("Reading file {}", path.display());
-        read_to_string(path).map_err(|err| {
-            Error::IO(io::Error::new(
-                err.kind(),
-                format!("Unable to read {}: {}", path.display(), err),
-            ))
+        read_to_string(path).map_err(|err| Error {
+            kind: ErrorKind::IO(err),
+            msg: format!("Unable to read file {}", path.display()),
         })
     }
 }

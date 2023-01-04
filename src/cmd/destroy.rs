@@ -52,7 +52,7 @@ mod test {
 
     use tempfile::tempdir;
 
-    use crate::{err::Error, fs::StubFileSystem, paths::StubPaths};
+    use crate::{fs::StubFileSystem, paths::StubPaths};
 
     use super::*;
 
@@ -125,14 +125,15 @@ mod test {
                         let project_dirpath = params.args.project_dirpath.clone();
                         move |_, path| {
                             assert_eq!(path, project_dirpath);
-                            path.canonicalize().map_err(Error::IO)
+                            Ok(path.canonicalize().unwrap())
                         }
                     })
                     .with_stub_of_delete_dir({
                         let project_dirpath = params.args.project_dirpath.clone();
                         move |_, path| {
                             assert_eq!(path, project_dirpath);
-                            remove_dir_all(path).map_err(Error::IO)
+                            remove_dir_all(path).unwrap();
+                            Ok(())
                         }
                     })
                     .with_stub_of_ensure_lines_are_absent({

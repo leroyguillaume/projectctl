@@ -11,7 +11,7 @@ use log::trace;
 
 use crate::{
     cli::{HookCommandArguments, HookCommandShellArgument, ENV_COMMAND},
-    err::{Error, Result},
+    err::{Error, ErrorKind, Result},
     paths::{DefaultPaths, Paths},
     sys::{DefaultSystem, System},
 };
@@ -51,18 +51,29 @@ impl HookCommand {
                 HookCommandShellArgument::Zsh => Ok(ZSH_HOOK_TEMPLATE),
             })
             .unwrap_or_else(|| {
-                trace!(
-                    "Retrieving `{}` environment variable value",
-                    SHELL_ENV_VAR_KEY
-                );
-                let shell = self.sys.env_var(SHELL_ENV_VAR_KEY).unwrap_or_default();
-                trace!("`{}`: {}", SHELL_ENV_VAR_KEY, shell);
-                if shell.ends_with("bash") {
-                    Ok(BASH_HOOK_TEMPLATE)
-                } else if shell.ends_with("zsh") {
-                    Ok(ZSH_HOOK_TEMPLATE)
+                if let Some(shell) = self.sys.env_var(SHELL_ENV_VAR_KEY) {
+                    trace!(
+                        "Environment variable {} has value `{}`",
+                        SHELL_ENV_VAR_KEY,
+                        shell
+                    );
+                    if shell.ends_with("bash") {
+                        Ok(BASH_HOOK_TEMPLATE)
+                    } else if shell.ends_with("zsh") {
+                        Ok(ZSH_HOOK_TEMPLATE)
+                    } else {
+                        Err(Error {
+                            kind: ErrorKind::UnsupportedShell,
+                            msg: format!("Shell `{}` is not supported yet", shell),
+                        })
+                    }
                 } else {
-                    Err(Error::UnsupportedShell(shell))
+                    trace!("Environment variable {} is not defined", SHELL_ENV_VAR_KEY);
+                    Err(Error {
+                        kind: ErrorKind::UnsupportedShell,
+                        msg: "Unable to retrieve current shell, please explicit it in command line"
+                            .into(),
+                    })
                 }
             })?;
         let allowed_dirs_filepath = self
@@ -140,24 +151,24 @@ mod test {
                         args: HookCommandArguments::default(),
                         shell_env_var_val: None,
                     },
-                    |_, res| match res.unwrap_err() {
-                        Error::UnsupportedShell(shell) => assert!(shell.is_empty()),
-                        err => panic!("expected UnsupportedShell (actual: {:?})", err),
+                    |_, res| match res.unwrap_err().kind {
+                        ErrorKind::UnsupportedShell => (),
+                        kind => panic!("expected UnsupportedShell (actual: {:?})", kind),
                     },
                 )
             }
 
             #[test]
             fn err_when_shell_is_unsupported() {
-                let expected_shell = "fish";
+                let shell = "fish";
                 test(
                     |_| Parameters {
                         args: HookCommandArguments::default(),
-                        shell_env_var_val: Some(expected_shell),
+                        shell_env_var_val: Some(shell),
                     },
-                    |_, res| match res.unwrap_err() {
-                        Error::UnsupportedShell(shell) => assert_eq!(shell, expected_shell),
-                        err => panic!("expected UnsupportedShell (actual: {:?})", err),
+                    |_, res| match res.unwrap_err().kind {
+                        ErrorKind::UnsupportedShell => (),
+                        kind => panic!("expected UnsupportedShell (actual: {:?})", kind),
                     },
                 )
             }

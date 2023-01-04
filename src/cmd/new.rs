@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     cli::{NewCommandArguments, Values},
-    err::{Error, Result},
+    err::{Error, ErrorKind, Result},
     fs::{write_into, DefaultFileSystem, FileSystem},
     git::{DefaultGit, Git, Reference},
     paths::{DefaultPaths, Paths, LOCAL_CONFIG_FILENAME, PROJECT_CONFIG_FILENAME},
@@ -65,10 +65,10 @@ impl NewCommand {
             .unwrap_or_else(|| self.fs.cwd().map(|cwd| cwd.join(&self.args.name)))?;
         debug!("Using {} as destination directory", dest.display());
         if dest.exists() {
-            return Err(Error::IO(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("Directory {} already exists", dest.display()),
-            )));
+            return Err(Error {
+                kind: ErrorKind::IO(io::Error::from(io::ErrorKind::AlreadyExists)),
+                msg: format!("Unable to create directory {}", dest.display()),
+            });
         }
         self.fs.create_dir(&dest)?;
         let tpl_repo_path = match self.fs.create_temp_dir() {
@@ -95,7 +95,10 @@ impl NewCommand {
                     self.renderer
                         .render_recursively(&tpl_dirpath, &dest, values)
                 } else {
-                    Err(Error::TemplateNotFound(self.args.tpl))
+                    Err(Error {
+                        kind: ErrorKind::TemplateNotFound,
+                        msg: format!("Template `{}` does not exist", self.args.tpl),
+                    })
                 }
             });
         Self::delete_dir(&tpl_repo_path, self.fs.as_ref());
@@ -274,8 +277,7 @@ mod test {
     use tempfile::tempdir;
 
     use crate::{
-        err::LiquidErrorSource, fs::StubFileSystem, git::StubGit, paths::StubPaths,
-        renderer::StubRenderer, sys::StubSystem,
+        fs::StubFileSystem, git::StubGit, paths::StubPaths, renderer::StubRenderer, sys::StubSystem,
     };
 
     use super::*;
@@ -355,12 +357,9 @@ mod test {
                         dest: dest.clone(),
                         git_ref: None,
                     },
-                    |_, res| match res.unwrap_err() {
-                        Error::IO(_) => (),
-                        err => panic!(
-                            "expected DestinationDirectoryAlreadyExists (actual: {:?})",
-                            err
-                        ),
+                    |_, res| match res.unwrap_err().kind {
+                        ErrorKind::IO(_) => (),
+                        kind => panic!("expected IO (actual: {:?})", kind),
                     },
                 );
             }
@@ -390,8 +389,8 @@ mod test {
                         git_ref: None,
                     },
                     |ctx, res| {
-                        match res.unwrap_err() {
-                            Error::Git(_) => (),
+                        match res.unwrap_err().kind {
+                            ErrorKind::Git(_) => (),
                             err => panic!("expected Git (actual: {:?})", err),
                         }
                         let dest = dest_fn(ctx);
@@ -427,10 +426,9 @@ mod test {
                         git_ref: None,
                     },
                     |ctx, res| {
-                        let expected_tpl = tpl_fn(ctx);
-                        match res.unwrap_err() {
-                            Error::TemplateNotFound(tpl) => assert_eq!(tpl, expected_tpl),
-                            err => panic!("expected Git (actual: {:?})", err),
+                        match res.unwrap_err().kind {
+                            ErrorKind::TemplateNotFound => (),
+                            kind => panic!("expected TemplateNotFound (actual: {:?})", kind),
                         }
                         let dest = dest_fn(ctx);
                         assert!(!dest.exists());
@@ -465,10 +463,9 @@ mod test {
                         git_ref: None,
                     },
                     |ctx, res| {
-                        let expected_tpl = tpl_fn(ctx);
-                        match res.unwrap_err() {
-                            Error::TemplateNotFound(tpl) => assert_eq!(tpl, expected_tpl),
-                            err => panic!("expected Git (actual: {:?})", err),
+                        match res.unwrap_err().kind {
+                            ErrorKind::TemplateNotFound => (),
+                            kind => panic!("expected TemplateNotFound (actual: {:?})", kind),
                         }
                         let dest = dest_fn(ctx);
                         assert!(dest.exists());
@@ -502,8 +499,8 @@ mod test {
                         git_ref: None,
                     },
                     |ctx, res| {
-                        match res.unwrap_err() {
-                            Error::Liquid { .. } => (),
+                        match res.unwrap_err().kind {
+                            ErrorKind::Liquid(_) => (),
                             err => panic!("expected Liquid (actual: {:?})", err),
                         }
                         let dest = dest_fn(ctx);
@@ -940,10 +937,13 @@ mod test {
                         let dest = expected.dest.clone();
                         move |_, path| {
                             assert_eq!(path, dest);
-                            dest.canonicalize().map_err(Error::IO)
+                            Ok(dest.canonicalize().unwrap())
                         }
                     })
-                    .with_stub_of_create_dir(|_, path| create_dir_all(path).map_err(Error::IO))
+                    .with_stub_of_create_dir(|_, path| {
+                        create_dir_all(path).unwrap();
+                        Ok(())
+                    })
                     .with_stub_of_create_temp_dir({
                         let tpl_repo_path = ctx.tpl_repo_path.clone();
                         move |_| Ok(tpl_repo_path.clone())
@@ -952,7 +952,12 @@ mod test {
                         let cwd = ctx.cwd.clone();
                         move |_| {
                             if params.fail_cwd {
-                                Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                Err(Error {
+                                    kind: ErrorKind::IO(io::Error::from(
+                                        io::ErrorKind::PermissionDenied,
+                                    )),
+                                    msg: "error".into(),
+                                })
                             } else {
                                 Ok(cwd.clone())
                             }
@@ -960,9 +965,15 @@ mod test {
                     })
                     .with_stub_of_delete_dir(move |_, path| {
                         if params.fail_dir_deletion {
-                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            Err(Error {
+                                kind: ErrorKind::IO(io::Error::from(
+                                    io::ErrorKind::PermissionDenied,
+                                )),
+                                msg: "error".into(),
+                            })
                         } else {
-                            remove_dir_all(path).map_err(Error::IO)
+                            remove_dir_all(path).unwrap();
+                            Ok(())
                         }
                     })
                     .with_stub_of_ensure_lines_are_present({
@@ -975,7 +986,12 @@ mod test {
                                 assert_eq!(path, allowed_dirs_filepath);
                                 assert!(lock);
                                 if params.fail_allowed_dirs_updating {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                    Err(Error {
+                                        kind: ErrorKind::IO(io::Error::from(
+                                            io::ErrorKind::PermissionDenied,
+                                        )),
+                                        msg: "error".into(),
+                                    })
                                 } else {
                                     Ok(())
                                 }
@@ -986,7 +1002,12 @@ mod test {
                                 assert_eq!(path, dest.join(GITIGNORE_FILENAME));
                                 assert!(!lock);
                                 if params.fail_gitignore_update {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                    Err(Error {
+                                        kind: ErrorKind::IO(io::Error::from(
+                                            io::ErrorKind::PermissionDenied,
+                                        )),
+                                        msg: "error".into(),
+                                    })
                                 } else {
                                     Ok(())
                                 }
@@ -1002,16 +1023,26 @@ mod test {
                             if i == 0 && params.project_cfg_content.is_none() {
                                 assert_eq!(path, dest.join(PROJECT_CONFIG_FILENAME));
                                 if params.fail_project_cfg_creation {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                    Err(Error {
+                                        kind: ErrorKind::IO(io::Error::from(
+                                            io::ErrorKind::PermissionDenied,
+                                        )),
+                                        msg: "error".into(),
+                                    })
                                 } else {
-                                    opts.open(path).map_err(Error::IO)
+                                    Ok(opts.open(path).unwrap())
                                 }
                             } else if i == 1 || i == 0 && params.project_cfg_content.is_some() {
                                 assert_eq!(path, dest.join(LOCAL_CONFIG_FILENAME));
                                 if params.fail_local_cfg_creation {
-                                    Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                                    Err(Error {
+                                        kind: ErrorKind::IO(io::Error::from(
+                                            io::ErrorKind::PermissionDenied,
+                                        )),
+                                        msg: "error".into(),
+                                    })
                                 } else {
-                                    opts.open(path).map_err(Error::IO)
+                                    Ok(opts.open(path).unwrap())
                                 }
                             } else {
                                 panic!("unexpected call of open");
@@ -1027,9 +1058,12 @@ mod test {
                             assert_eq!(reference, expected.git_ref);
                             assert_eq!(dest, tpl_repo_path);
                             if params.fail_git_checking_out {
-                                Err(Error::Git(git2::Error::from_str("error")))
+                                Err(Error {
+                                    kind: ErrorKind::Git(git2::Error::from_str("error")),
+                                    msg: "error".into(),
+                                })
                             } else {
-                                Repository::init(&tpl_repo_path).map_err(Error::Git)
+                                Ok(Repository::init(&tpl_repo_path).unwrap())
                             }
                         }
                     })
@@ -1038,9 +1072,12 @@ mod test {
                         move |_, path| {
                             assert_eq!(path, expected_dest);
                             if params.fail_git_init {
-                                Err(Error::Git(git2::Error::from_str("error")))
+                                Err(Error {
+                                    kind: ErrorKind::Git(git2::Error::from_str("error")),
+                                    msg: "error".into(),
+                                })
                             } else {
-                                Repository::init(path).map_err(Error::Git)
+                                Ok(Repository::init(path).unwrap())
                             }
                         }
                     });
@@ -1051,7 +1088,12 @@ mod test {
                         assert_eq!(allowed_dirs_filepath, expected_allowed_dirs_filepath);
                         assert!(cfg_filepath.is_none());
                         if params.fail_allowed_dirs_path_computing {
-                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            Err(Error {
+                                kind: ErrorKind::IO(io::Error::from(
+                                    io::ErrorKind::PermissionDenied,
+                                )),
+                                msg: "error".into(),
+                            })
                         } else {
                             Ok(filepath.clone())
                         }
@@ -1066,9 +1108,9 @@ mod test {
                         assert_eq!(dest, expected.dest);
                         assert_eq!(values, expected_values);
                         if params.fail_rendering {
-                            Err(Error::Liquid {
-                                cause: liquid::Error::with_msg("error"),
-                                src: LiquidErrorSource::Filename("test".into()),
+                            Err(Error {
+                                kind: ErrorKind::Liquid(liquid::Error::with_msg("error")),
+                                msg: "error".into(),
                             })
                         } else {
                             if let Some(ref content) = params.gitignore_content {
@@ -1248,14 +1290,24 @@ mod test {
                     if i == 0 {
                         assert_eq!(key, GIT_USER_NAME_CONFIG_KEY);
                         if params.fail_git_username_retrieving {
-                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            Err(Error {
+                                kind: ErrorKind::IO(io::Error::from(
+                                    io::ErrorKind::PermissionDenied,
+                                )),
+                                msg: "error".into(),
+                            })
                         } else {
                             Ok(ctx.git_username.into())
                         }
                     } else if i == 1 {
                         assert_eq!(key, GIT_USER_EMAIL_CONFIG_KEY);
                         if params.fail_git_email_retrieving {
-                            Err(Error::IO(io::Error::from(io::ErrorKind::PermissionDenied)))
+                            Err(Error {
+                                kind: ErrorKind::IO(io::Error::from(
+                                    io::ErrorKind::PermissionDenied,
+                                )),
+                                msg: "error".into(),
+                            })
                         } else {
                             Ok(ctx.git_email.into())
                         }

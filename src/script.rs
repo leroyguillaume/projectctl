@@ -1,8 +1,8 @@
-use std::{io, process::Command};
+use std::process::Command;
 
 use log::debug;
 
-use crate::err::{Error, Result};
+use crate::err::{Error, ErrorKind, Result};
 
 #[cfg_attr(test, stub_trait::stub)]
 pub trait ScriptRunner {
@@ -24,19 +24,23 @@ impl ScriptRunner for DefaultScriptRunner {
         let output = Command::new(shell)
             .args(["-c", script])
             .output()
-            .map_err(Error::IO)?;
+            .map_err(|err| Error {
+                kind: ErrorKind::IO(err),
+                msg: format!("Unable to execute {}", script),
+            })?;
         let stdout = Self::output_to_string(output.stdout);
         if output.status.success() {
             Ok(stdout)
         } else {
             let stderr = Self::output_to_string(output.stderr);
-            Err(Error::IO(io::Error::new(
-                io::ErrorKind::Other,
-                format!(
-                    "{} exited with code {}\nstdout:\n{}stderr:\n{}",
-                    shell, output.status, stdout, stderr
-                ),
-            )))
+            Err(Error {
+                kind: ErrorKind::ScriptFailed {
+                    rc: output.status.code(),
+                    stderr,
+                    stdout,
+                },
+                msg: format!("{} failed", shell),
+            })
         }
     }
 }
