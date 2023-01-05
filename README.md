@@ -8,8 +8,6 @@ CLI tool to manage project.
 
 - Install from binary
 
-*Sorry for Mac M1/M2 users, I don't have it so I can't build on this architecture because it's not available on GitHub Actions.*
-
 ```bash
 VERSION=1.0.0
 
@@ -19,6 +17,8 @@ curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-aarch64
 # MacOS x64
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-macos-x64
+# MacOS ARM
+curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-macos-aarch64
 
 sudo chmod +x /usr/local/bin/projectctl
 
