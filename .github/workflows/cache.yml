@@ -80,26 +80,3 @@ jobs:
           path: target/${{ matrix.target.name }}/release/projectctl
           if-no-files-found: error
           retention-days: 1
-
-  pip:
-    needs: [cargo]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
-
-      - name: Restore cargo cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo
-            target
-          key: x86_64-unknown-linux-gnu-cargo-${{ hashFiles('Cargo.lock') }}
-
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.0
