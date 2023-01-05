@@ -9,7 +9,7 @@ CLI tool to manage project.
 - Install from binary
 
 ```bash
-VERSION=1.0.0
+VERSION=1.1.0
 
 # Linux x64
 curl -Lfo /usr/local/bin/projectctl https://github.com/leroyguillaume/projectctl/releases/download/v$VERSION/projectctl-$VERSION-linux-x64
