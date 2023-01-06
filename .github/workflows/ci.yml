@@ -54,17 +54,12 @@ jobs:
           command: build
           args: --target ${{ matrix.target.name }}
 
-  pre-commit:
+  lint:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
 
       - name: Restore cargo cache
         uses: actions/cache@v3
@@ -74,8 +69,11 @@ jobs:
             target
           key: x86_64-unknown-linux-gnu-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.0
+      - name: Run cargo fmt
+        run: cargo fmt --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --tests -- -D warnings
 
   test:
     needs: [build]
@@ -176,7 +174,6 @@ jobs:
           projectctl -vvv new \
             -d "Awesome project" \
             --values '{"repository-url":"https://github.com/username/project-name"}'\
-            --git-branch projectctl-v1.0.0 \
             rs-lib test $PROJECT_DIR
           cp examples/projectctl.yml $PROJECT_DIR/projectctl.local.yml
           cd $PROJECT_DIR
