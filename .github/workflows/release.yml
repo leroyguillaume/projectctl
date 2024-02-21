@@ -1,0 +1,45 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags: ['*']
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Download latest binaries
+      uses: dawidd6/action-download-artifact@master
+      with:
+        commit: ${{ github.sha }}
+        workflow: build.yml
+
+    - name: Rename binaries
+      env:
+        TARGETS: aarch64-unknown-linux-gnu x86_64-apple-darwin x86_64-unknown-linux-gnu
+      run: |
+        for target in $TARGETS; do
+          mv ${{ github.event.repository.name }}-$target/${{ github.event.repository.name }} ${{ github.event.repository.name }}-$target/${{ github.event.repository.name }}-$target
+        done
+
+    - name: Create release
+      uses: softprops/action-gh-release@master
+      with:
+        fail_on_unmatched_files: true
+        files: |
+          ${{ github.event.repository.name }}-aarch64-unknown-linux-gnu/${{ github.event.repository.name }}-aarch64-unknown-linux-gnu
+          ${{ github.event.repository.name }}-x86_64-apple-darwin/${{ github.event.repository.name }}-x86_64-apple-darwin
+          ${{ github.event.repository.name }}-x86_64-unknown-linux-gnu/${{ github.event.repository.name }}-x86_64-unknown-linux-gnu
+        generate_release_notes: true
+
+    - name: Publish
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: cargo publish
