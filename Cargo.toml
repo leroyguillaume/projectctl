@@ -1,0 +1,13 @@
+[dependencies]
+
+[package]
+authors = ["Guillaume Leroy <pro.guillaume.leroy@gmail.com>"]
+categories = ["command-line-utilities", "configuration", "development-tools"]
+description = "CLI to make easier projects automation and environment management"
+documentation = "https://docs.rs/projectctl"
+edition = "2021"
+keywords = ["automation", "environment", "project", "template", "snippet"]
+license = "MIT"
+name = "projectctl"
+repository = "https://github.com/leroyguillaume/projectctl"
+version = "2.0.0"
