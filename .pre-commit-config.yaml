@@ -24,8 +24,4 @@ repos:
   - id: cargo-check
     args: [--all-features]
   - id: clippy
-    args: [--all-features, --tests, --, -D, warnings]
-- repo: https://github.com/est31/cargo-udeps
-  rev: master
-  hooks:
-  - id: udeps
+    args: [--all-features, --tests, --no-deps, --, -D, warnings]

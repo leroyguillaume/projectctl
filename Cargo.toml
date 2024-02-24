@@ -1,12 +1,41 @@
 [dependencies]
+clap = {version = "4", features = ["derive", "env"]}
+git2 = "0"
+hex = "0"
+liquid = "0"
+liquid-core = {version = "0", features = ["derive"]}
+mockable = "2"
+openssl = {version = "0.10", features = ["vendored"]}
+reqwest = {version = "0", features = ["blocking"]}
+serde = {version = "1", features = ["derive"]}
+serde_json = "1"
+sha2 = "0"
+tempdir = "0"
+thiserror = "1"
+tracing = "0"
+tracing-subscriber = {version = "0", features = ["env-filter"]}
+
+[dev-dependencies]
+mockable = {version = "2", features = ["mock"]}
+mockall = "0"
 
 [package]
 authors = ["Guillaume Leroy <pro.guillaume.leroy@gmail.com>"]
-categories = ["command-line-utilities", "configuration", "development-tools"]
+categories = [
+  "command-line-utilities",
+  "configuration",
+  "development-tools"
+]
 description = "CLI to make easier projects automation and environment management"
 documentation = "https://docs.rs/projectctl"
 edition = "2021"
-keywords = ["automation", "environment", "project", "template", "snippet"]
+keywords = [
+  "automation",
+  "environment",
+  "project",
+  "template",
+  "snippet"
+]
 license = "MIT"
 name = "projectctl"
 repository = "https://github.com/leroyguillaume/projectctl"

@@ -1,0 +1,10 @@
+[package]
+authors = ["{{ git.user_name }} <{{ git.user_email }}>"]
+categories = {{ var.categories | json_encode_pretty }}
+description = "{{ project.description }}"
+edition = "2021"
+keywords = {{ var.keywords | json_encode_pretty }}
+license = "MIT"
+name = "{{ project.name }}"
+repository = "{{ project.repository }}"
+version = "0.1.0"

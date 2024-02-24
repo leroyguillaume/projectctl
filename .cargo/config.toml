@@ -1,0 +1,2 @@
+[env]
+PROJECTCTL_LOG_FILTER = "projectctl=debug,warn"
